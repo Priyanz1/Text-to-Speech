@@ -1,0 +1,22 @@
+{
+  "name": "tts-saas-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "API server for the AI Text-to-Speech SaaS",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "mongoose": "^8.20.1",
+    "zod": "^4.1.13"
+  }
+}
