@@ -1,107 +1,86 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Link, Navigate, Route, Routes } from 'react-router-dom';
 
-import { env } from './config/env.js';
-import { api } from './lib/apiClient.js';
+import { ProtectedRoute } from './app/ProtectedRoute.jsx';
+import { AdminPage } from './features/admin/AdminPage.jsx';
+import { AuthLayout } from './features/auth/AuthLayout.jsx';
+import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage.jsx';
+import { LoginPage } from './features/auth/LoginPage.jsx';
+import { ResendVerificationPage } from './features/auth/ResendVerificationPage.jsx';
+import { ResetPasswordPage } from './features/auth/ResetPasswordPage.jsx';
+import { SignupPage } from './features/auth/SignupPage.jsx';
+import { VerifyEmailPage } from './features/auth/VerifyEmailPage.jsx';
+import { BillingPage } from './features/billing/BillingPage.jsx';
+import { DashboardPage } from './features/dashboard/DashboardPage.jsx';
+import { HistoryPage } from './features/history/HistoryPage.jsx';
 
-/**
- * Phase 0 placeholder screen.
- *
- * Its only job is to prove the full chain is wired up:
- * browser -> Vite dev server -> CORS -> Express -> MongoDB -> back again.
- *
- * Phase 4 replaces this with the router and real screens, and moves data
- * fetching to TanStack Query (which handles caching, retries and cancellation
- * properly - deliberately not reinvented here).
- */
-export default function App() {
-  const [health, setHealth] = useState(null);
-  const [errorMessage, setErrorMessage] = useState(null);
-  // Starts true because the effect below checks immediately on mount.
-  const [isChecking, setIsChecking] = useState(true);
-
-  // No setState before the first `await`: updating state synchronously inside
-  // an effect starts a second render pass for no reason.
-  const runHealthCheck = useCallback(async () => {
-    try {
-      const response = await api.get('/api/health');
-      setHealth(response.data);
-      setErrorMessage(null);
-    } catch (error) {
-      // A 503 from /api/health is still useful: the body tells us the server
-      // is up but the database is not connected.
-      setHealth(error.payload?.data ?? null);
-      setErrorMessage(error.message);
-    } finally {
-      setIsChecking(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    // The lint rule cannot see that every setState in runHealthCheck happens
-    // after an await. Fetching on mount is the intended behaviour here, and
-    // Phase 4 hands this job to TanStack Query.
-    // eslint-disable-next-line react/set-state-in-effect
-    runHealthCheck();
-  }, [runHealthCheck]);
-
-  function handleRecheck() {
-    setIsChecking(true);
-    runHealthCheck();
-  }
-
-  const state = isChecking ? 'unknown' : errorMessage ? 'bad' : 'good';
-
+function NotFoundPage() {
   return (
-    <main className="shell">
-      <header className="header">
-        <h1>AI Text&#8209;to&#8209;Speech</h1>
-        <p className="subtitle">Phase 0 &mdash; project foundation</p>
-      </header>
+    <AuthLayout title="Page not found" subtitle="404">
+      <p className="form-note">That address does not exist.</p>
+      <Link className="form-aside" to="/">
+        Go home
+      </Link>
+    </AuthLayout>
+  );
+}
 
-      <section className="card">
-        <div className="card-head">
-          <h2>API connection</h2>
-          <button type="button" onClick={handleRecheck} disabled={isChecking}>
-            {isChecking ? 'Checking…' : 'Re-check'}
-          </button>
-        </div>
+export default function App() {
+  return (
+    <Routes>
+      {/* Unauthenticated: ProtectedRoute sends them to /login from here. */}
+      <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-        <p className={`status status-${state}`}>
-          <span className="dot" aria-hidden="true" />
-          {isChecking ? 'Contacting the API…' : (errorMessage ?? 'API reachable')}
-        </p>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/signup" element={<SignupPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
-        <dl className="facts">
-          <div>
-            <dt>API base URL</dt>
-            <dd>{env.apiBaseUrl}</dd>
-          </div>
-          <div>
-            <dt>Server status</dt>
-            <dd>{health?.status ?? '—'}</dd>
-          </div>
-          <div>
-            <dt>Database</dt>
-            <dd>{health?.database ?? '—'}</dd>
-          </div>
-          <div>
-            <dt>Server environment</dt>
-            <dd>{health?.environment ?? '—'}</dd>
-          </div>
-          <div>
-            <dt>Server uptime</dt>
-            <dd>{health ? `${health.uptimeSeconds}s` : '—'}</dd>
-          </div>
-          <div>
-            <dt>Client mode</dt>
-            <dd>{env.mode}</dd>
-          </div>
-        </dl>
-      </section>
+      {/* These two read their token from ?token= in the URL. The paths have to
+          match the links built in server/src/integrations/email/templates.js. */}
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
+      <Route path="/resend-verification" element={<ResendVerificationPage />} />
 
-      <footer className="footer">
-        No authentication, credits or speech generation yet &mdash; those arrive in later phases.
-      </footer>
-    </main>
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/history"
+        element={
+          <ProtectedRoute>
+            <HistoryPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/billing"
+        element={
+          <ProtectedRoute>
+            <BillingPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Signed in is all this route checks. Being an administrator is checked by
+          the API on every request, reading the role from the database - so a
+          non-admin who routes themselves here gets a 403 and an explanation
+          rather than a blank page. */}
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <AdminPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route path="*" element={<NotFoundPage />} />
+    </Routes>
   );
 }

@@ -1,10 +1,15 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 
+import { corsOptions } from './config/cors.js';
 import { env } from './config/env.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { apiRateLimit } from './middleware/rateLimit.js';
+import { securityHeaders } from './middleware/securityHeaders.js';
+import { webhooksRouter } from './modules/billing/webhooks.routes.js';
 import { apiRouter } from './routes/index.js';
 
 /**
@@ -14,7 +19,8 @@ import { apiRouter } from './routes/index.js';
  * tests can create an app instance without binding a port or opening sockets.
  *
  * Middleware order matters and reads top to bottom:
- *   CORS -> body parsing -> request logging -> routes -> 404 -> error handler
+ *   security headers -> CORS -> webhooks (raw body) -> JSON -> cookies ->
+ *   logging -> rate limit -> routes -> 404 -> errors
  */
 export function createApp() {
   const app = express();
@@ -22,24 +28,53 @@ export function createApp() {
   // Do not advertise the framework in response headers.
   app.disable('x-powered-by');
 
-  // Render, Railway and Fly all sit behind a proxy. Without this, req.ip is the
-  // proxy's address, which would make per-IP rate limiting (Phase 9) useless.
+  // Render terminates TLS and forwards to us over HTTP, so without this
+  // req.ip is the proxy's address (making per-IP rate limiting useless) and
+  // req.protocol is "http" (which would break Secure cookies). The value is
+  // the number of proxies in front of us: Render is 1.
   app.set('trust proxy', 1);
 
-  // Only our own frontend may call this API from a browser.
-  // `credentials: true` is required for the refresh-token cookie in Phase 2.
-  app.use(
-    cors({
-      origin: env.CLIENT_URL,
-      credentials: true,
-    }),
-  );
+  // First, so even a 404 or a CORS refusal carries them. See middleware/securityHeaders.js.
+  app.use(securityHeaders);
 
-  // Cap the body size. The default is 100kb; 1mb leaves room for the long text
-  // payloads the TTS endpoint will accept later without allowing huge uploads.
-  app.use(express.json({ limit: '1mb' }));
+  // Which browser origins may call this API. See config/cors.js.
+  app.use(cors(corsOptions));
+
+  /**
+   * Before express.json(), and that order is the whole reason this is mounted
+   * here rather than inside apiRouter.
+   *
+   * A webhook signature is an HMAC over the exact bytes Razorpay sent. Once
+   * express.json() has parsed the body those bytes are unrecoverable, so the raw
+   * parser on this router has to see the request first. Everything else still
+   * gets JSON, because express.raw() only matches this one path.
+   */
+  app.use('/api/webhooks', webhooksRouter);
+
+  /**
+   * Cap the body size. Configurable, defaulting to 100kb, because the biggest
+   * legitimate request is a TTS payload at TTS_MAX_INPUT_BYTES - a few kilobytes -
+   * and a limit sized for that is a limit an attacker cannot use to exhaust
+   * memory. A 413 from here is deliberate.
+   */
+  app.use(express.json({ limit: env.JSON_BODY_LIMIT }));
+
+  // Populates req.cookies. Only the refresh token lives in a cookie, and only
+  // /api/auth ever receives it - see config/cookies.js.
+  app.use(cookieParser());
 
   app.use(requestLogger);
+
+  /**
+   * A per-IP ceiling on everything below. Generous by design: it is a backstop
+   * against a runaway client or a crude flood, not the real defence. The tight
+   * limits are on /auth, /tts and /billing, applied at their mount points.
+   *
+   * Below the webhook mount on purpose - Razorpay retries from its own addresses,
+   * and a burst of retries after an outage is exactly when the webhook must not be
+   * refused.
+   */
+  app.use('/api', apiRateLimit);
 
   app.use('/api', apiRouter);
 

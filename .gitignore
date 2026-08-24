@@ -3,9 +3,13 @@ node_modules/
 
 # Environment files - never commit these.
 # .env.example files are tracked on purpose so the required keys are documented.
+# .env.test is tracked too: it holds no secrets - every provider in it is mock or
+# local - and `npm test` needs it present, or the suite falls back to the real
+# .env and starts calling real services.
 .env
 .env.*
 !.env.example
+!.env.test
 
 # Build output
 dist/
@@ -41,6 +45,7 @@ uploads/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+.claude/
 *.swp
 *.sw?
 
