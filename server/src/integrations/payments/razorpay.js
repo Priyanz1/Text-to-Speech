@@ -42,7 +42,17 @@ async function razorpayFetch(path, { method = 'GET', body } = {}) {
     const detail = payload?.error?.description ?? `HTTP ${response.status}`;
     const error = new Error(`Razorpay refused the request (${response.status}): ${detail}`);
     error.providerCode = payload?.error?.code ?? null;
-    error.statusCode = response.status;
+    /**
+     * Deliberately NOT `statusCode`.
+     *
+     * errorHandler adopts any 4xx it finds on `err.statusCode`, so a provider 401
+     * ("Authentication failed" - our keys are wrong) would be answered to the
+     * browser as our own 401. apiClient treats a 401 as an expired session: it
+     * rotates the refresh token and retries, which creates a second order at the
+     * provider for one click and signs the user out if the rotation fails. A
+     * misconfigured key is a server fault, so it must surface as 5xx.
+     */
+    error.providerStatus = response.status;
     throw error;
   }
 

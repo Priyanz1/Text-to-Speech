@@ -4,10 +4,25 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
-// Resolve .env relative to the server package root so `npm start` works no
-// matter which directory the process was launched from.
+// Resolve the env file relative to the server package root so `npm start` works
+// no matter which directory the process was launched from.
 const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-dotenv.config({ path: path.join(serverRoot, '.env'), quiet: true });
+
+/**
+ * Tests read .env.test; everything else reads .env.
+ *
+ * Deliberately a choice, not a fallback chain: a test run must never see the real
+ * .env. When it did, EMAIL_PROVIDER=resend made the suite attempt real email
+ * delivery - which fails on @example.com recipients, so the tests that read the
+ * verification token out of the log provider had no token to read, and every
+ * flow behind email verification failed with it. Real keys also mean a test run
+ * can spend provider money.
+ *
+ * NODE_ENV is set by the --env-file=.env.test in the `test` script, which node
+ * applies before any module here is evaluated.
+ */
+const envFile = process.env.NODE_ENV === 'test' ? '.env.test' : '.env';
+dotenv.config({ path: path.join(serverRoot, envFile), quiet: true });
 
 // A browser's Origin header never has a trailing slash, so a CLIENT_URL of
 // "https://example.com/" would never match and CORS would fail with no obvious
@@ -112,11 +127,12 @@ const envSchema = z.object({
   // thing to break auth in production.
   COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none', '']).default(''),
 
-  // 'google' calls Google Cloud Text-to-Speech. 'mock' returns an audible tone of
-  // the right length without leaving the machine, so the whole credit path -
-  // reserve, charge, refund, download - is testable and demonstrable before any
-  // billing account exists. See integrations/ttsProvider.
-  TTS_PROVIDER: z.enum(['google', 'mock']).default('mock'),
+  // 'google' calls Google Cloud Text-to-Speech. 'elevenlabs' calls ElevenLabs,
+  // for development and testing. 'mock' returns an audible tone of the right
+  // length without leaving the machine, so the whole credit path - reserve,
+  // charge, refund, download - is testable and demonstrable before any billing
+  // account exists. See integrations/ttsProvider.
+  TTS_PROVIDER: z.enum(['google', 'elevenlabs', 'mock']).default('mock'),
 
   /**
    * The service account key, as raw JSON or base64. Required when
@@ -131,6 +147,16 @@ const envSchema = z.object({
     .string()
     .default('')
     .transform((raw) => (raw ? { raw, parsed: parseServiceAccount(raw) } : null)),
+
+  /**
+   * The ElevenLabs API key. Required when TTS_PROVIDER=elevenlabs.
+   *
+   * A secret, and one this server never forwards: it travels in the xi-api-key
+   * header from this process only, so nothing about it reaches the browser. The
+   * client asks this API for speech and this API asks ElevenLabs - same shape as
+   * the Google credentials above.
+   */
+  ELEVENLABS_API_KEY: z.string().default(''),
 
   /**
    * Where generated audio is written.
@@ -262,6 +288,10 @@ const parsed = envSchema
   )
   // One rule per missing credential rather than one combined rule, so the boot
   // failure names the variable you actually have to go and find.
+  .refine((value) => value.TTS_PROVIDER !== 'elevenlabs' || value.ELEVENLABS_API_KEY.length > 0, {
+    path: ['ELEVENLABS_API_KEY'],
+    message: 'ELEVENLABS_API_KEY is required when TTS_PROVIDER is "elevenlabs"',
+  })
   .refine((value) => value.PAYMENT_PROVIDER !== 'razorpay' || value.RAZORPAY_KEY_ID.length > 0, {
     path: ['RAZORPAY_KEY_ID'],
     message: 'RAZORPAY_KEY_ID is required when PAYMENT_PROVIDER is "razorpay"',

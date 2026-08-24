@@ -13,7 +13,7 @@
     "start": "node src/index.js",
     "seed": "node scripts/seed.js",
     "seed:billing": "node scripts/seed-billing.js",
-    "test": "node --test"
+    "test": "node --env-file=.env.test --test"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

@@ -90,7 +90,10 @@ async function seedVoices() {
   let created = 0;
 
   for (const voice of voices) {
-    const provider = ttsProvider.providerName === 'google' ? 'google' : 'mock';
+    // Whatever provider is live, named as itself. Not a two-way choice: a third
+    // provider labelled as one of the other two would put the wrong name in the
+    // unique index, in the Generation snapshot and in the admin voice list.
+    const provider = ttsProvider.providerName;
 
     const result = await Voice.updateOne(
       { provider, providerVoiceId: voice.providerVoiceId },
@@ -110,7 +113,10 @@ async function seedVoices() {
         $setOnInsert: {
           provider,
           providerVoiceId: voice.providerVoiceId,
-          name: voice.providerVoiceId,
+          // The id doubles as the label for providers whose ids are readable
+          // ('en-US-Neural2-F'). An ElevenLabs id is an opaque hash, so that
+          // provider sends a name and this uses it.
+          name: voice.name ?? voice.providerVoiceId,
           tier: voice.tier,
           costMultiplier: 1,
         },
