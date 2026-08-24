@@ -31,7 +31,7 @@ export function setSessionExpiredHandler(handler) {
   onSessionExpired = handler;
 }
 
-async function rawRequest(path, { method = 'GET', body, headers, signal } = {}) {
+async function rawRequest(path, { method = 'GET', body, headers, signal, responseType = 'json' } = {}) {
   let response;
 
   try {
@@ -56,19 +56,20 @@ async function rawRequest(path, { method = 'GET', body, headers, signal } = {}) 
     throw error;
   }
 
-  // Read as text first: an error response may be an HTML page or empty.
-  const raw = await response.text();
-
-  let payload = null;
-  if (raw) {
-    try {
-      payload = JSON.parse(raw);
-    } catch {
-      payload = { error: { message: raw.slice(0, 200) } };
-    }
-  }
-
   if (!response.ok) {
+    // Error responses are always JSON or text, never binary, whatever the caller
+    // asked for. Read as text first: it may be an HTML page or empty.
+    const raw = await response.text();
+
+    let payload = null;
+    if (raw) {
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        payload = { error: { message: raw.slice(0, 200) } };
+      }
+    }
+
     const error = new Error(
       payload?.error?.message ?? `Request failed with status ${response.status}`,
     );
@@ -77,7 +78,25 @@ async function rawRequest(path, { method = 'GET', body, headers, signal } = {}) 
     throw error;
   }
 
-  return payload;
+  /**
+   * Audio comes back as a blob, not JSON.
+   *
+   * It has to come through this client rather than going straight into an
+   * <audio src>, because the tag cannot send an Authorization header - so the
+   * only alternative would be a signed or public URL, and the audio is private.
+   * Fetching it here also means it gets the same silent token refresh as
+   * everything else.
+   */
+  if (responseType === 'blob') return response.blob();
+
+  const raw = await response.text();
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { error: { message: raw.slice(0, 200) } };
+  }
 }
 
 /**
@@ -137,4 +156,7 @@ export const api = {
   post: (path, body, options) => request(path, { ...options, method: 'POST', body }),
   patch: (path, body, options) => request(path, { ...options, method: 'PATCH', body }),
   delete: (path, options) => request(path, { ...options, method: 'DELETE' }),
+
+  // For the generated audio. Same auth and same retry-on-401 as every other call.
+  getBlob: (path, options) => request(path, { ...options, method: 'GET', responseType: 'blob' }),
 };

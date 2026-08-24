@@ -2,6 +2,8 @@ import { createApp } from './app.js';
 import { env, isDevelopment } from './config/env.js';
 import { logger } from './config/logger.js';
 import { connectDatabase, disconnectDatabase } from './config/db.js';
+import * as storage from './integrations/storage/index.js';
+import * as ttsProvider from './integrations/ttsProvider/index.js';
 import { markShuttingDown } from './utils/lifecycle.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -15,6 +17,11 @@ const server = app.listen(env.PORT, () => {
     isDevelopment ? `Server listening on http://localhost:${env.PORT}` : 'Server listening',
     { port: env.PORT, environment: env.NODE_ENV },
   );
+
+  // Which provider is live is never worth guessing at, especially the one that
+  // costs money per request.
+  logger.info(`Speech provider: ${ttsProvider.describe()}`);
+  logger.info(`Audio storage: ${storage.describe()}`);
 });
 
 // Connect to MongoDB *after* the server is listening, and do not treat failure

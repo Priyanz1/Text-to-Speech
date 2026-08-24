@@ -13,6 +13,7 @@ import {
   verificationEmail,
 } from '../../integrations/email/templates.js';
 import { User } from '../users/user.model.js';
+import { grantSignupCredits } from '../credits/credits.service.js';
 import { TOKEN_TYPES, Token } from './token.model.js';
 import {
   createOpaqueToken,
@@ -270,9 +271,21 @@ export async function verifyEmail(rawToken) {
 
   // Already verified through another link: nothing to do, but not an error.
   if (user.emailVerifiedAt === null) {
+    // Granted BEFORE the flag is set, on purpose. resendVerification returns
+    // early for an already-verified address, so a grant that failed after the
+    // flag was written would leave the account verified, ungranted, and with no
+    // way to ask for another link. The grant is idempotent, so the reverse order
+    // costs nothing.
+    await grantSignupCredits(user);
+
     user.emailVerifiedAt = new Date();
     await user.save();
     logger.info('Email verified', { userId: user._id.toString() });
+
+    // Re-read: the grant updated the balance with its own atomic write, so this
+    // document's copy of it is stale - and this document is what the response,
+    // including the credit balance, is built from.
+    return (await User.findById(user._id)) ?? user;
   }
 
   return user;
@@ -337,7 +350,12 @@ export async function resetPassword({ token: rawToken, password }) {
   // Clicking a link in that inbox proves control of the address, which is the
   // same thing email verification tests. Someone who reset their password
   // through it should not then be asked to verify separately.
-  user.emailVerifiedAt ??= new Date();
+  if (user.emailVerifiedAt === null) {
+    // Same ordering as verifyEmail, and the same reason. This response carries no
+    // balance, so there is nothing to re-read here.
+    await grantSignupCredits(user);
+    user.emailVerifiedAt = new Date();
+  }
 
   await user.save();
 

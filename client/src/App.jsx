@@ -9,6 +9,7 @@ import { ResetPasswordPage } from './features/auth/ResetPasswordPage.jsx';
 import { SignupPage } from './features/auth/SignupPage.jsx';
 import { VerifyEmailPage } from './features/auth/VerifyEmailPage.jsx';
 import { DashboardPage } from './features/dashboard/DashboardPage.jsx';
+import { HistoryPage } from './features/history/HistoryPage.jsx';
 
 function NotFoundPage() {
   return (
@@ -42,6 +43,15 @@ export default function App() {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/history"
+        element={
+          <ProtectedRoute>
+            <HistoryPage />
           </ProtectedRoute>
         }
       />

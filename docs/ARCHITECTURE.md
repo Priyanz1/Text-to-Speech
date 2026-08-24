@@ -81,9 +81,14 @@ server/src/
     health/      (Phase 0-1) liveness + readiness
     auth/        (Phase 2-3) signup, login, refresh, logout, verify, reset
     users/       (Phase 2) user.model.js — the model only, so far
-                 + later: voices/ tts/ generations/ credits/ plans/ billing/
-                 webhooks/ admin/
-  integrations/  email/ (Phase 3)  + later: ttsProvider/ storage/ payments/
+    plans/       (Phase 5) plan catalog; the only seeded plan is free
+    credits/     (Phase 5) ledger, atomic reserve/refund, balance, reconcile
+    voices/      (Phase 6) catalog, languages, plan-filtered listing
+    generations/ (Phase 7) generation.model.js — the model only, so far
+    tts/         (Phase 7) generate, audio, config
+                 + later: billing/ webhooks/ admin/
+  integrations/  email/ (Phase 3), ttsProvider/ + storage/ (Phase 6)
+                 + later: payments/
   jobs/          credit renewal, expired-audio cleanup, webhook reconciliation
   utils/         ApiError, lifecycle, token hashing, cost calculation
 ```
@@ -93,6 +98,15 @@ of `listVoices()` and `synthesize({ text, voiceId, settings })`. Providers get s
 for cost, quality, outages, or premium tiers. Nothing outside `integrations/` may import
 a vendor SDK. The same pattern applies to storage, email, and payments.
 
+Google is reached without its SDK: a service-account JWT assertion signed with the
+`jsonwebtoken` dependency auth already needs, exchanged for an hour-long access token at
+`oauth2.googleapis.com/token` and cached. Two REST calls, zero new dependencies.
+
+Each provider also has a **local** implementation — `EMAIL_PROVIDER=log`,
+`TTS_PROVIDER=mock` — so the whole path is testable with no vendor account. The mock
+returns a real, playable WAV that is audibly a chime and not speech, because a convincing
+mock is one that ships by accident.
+
 ---
 
 ## 4. Frontend structure
@@ -100,9 +114,14 @@ a vendor SDK. The same pattern applies to storage, email, and payments.
 Vite + React Router + TanStack Query + Tailwind + react-hook-form + Zod.
 No Redux: TanStack Query owns server state, one context owns auth.
 
-Phases 2–4 ship the router, the auth context and the api client. TanStack Query,
-Tailwind and react-hook-form are not in yet — plain CSS and controlled inputs cover the
-auth forms, and there is nothing to cache until Phase 5's balance and ledger.
+Phases 2–4 ship the router, the auth context and the api client. Phase 7 adds the studio
+panel. TanStack Query, Tailwind and react-hook-form are still not in — plain CSS and
+controlled inputs cover the forms, and the studio's three fetches (config, languages,
+voices) do not yet need a cache with invalidation.
+
+Generated audio reaches the player through `api.getBlob()` and `URL.createObjectURL`,
+not through `<audio src="…/audio">`: the tag cannot send an `Authorization` header, and
+the alternative to a header is a signed or public URL for private audio.
 
 ```
 client/src/
@@ -182,26 +201,42 @@ Indexes to create with the models: `User.email` unique · `Generation { userId, 
 Purchased credits do not expire. What happens to unused subscription credits at cycle
 end is **an open decision** (DECISIONS.md §2) and is read from `Plan`, never hard-coded.
 
-**Reserve → commit → refund**, in this order:
+**Validate → record → reserve → synthesize → store**, in this order:
 
 1. Validate — non-empty, within the plan's per-request limit, voice permitted for plan.
-   The provider limit is measured in **UTF-8 bytes**, not characters.
+   The provider limit is measured in **UTF-8 bytes**, not characters; the plan's limit is
+   in characters, because that is what credits are charged in.
 2. Compute cost = `charCount × voice.costMultiplier` (multiplier read from the DB).
-3. **Reserve atomically**: one `findOneAndUpdate` with the balance condition *in the
-   filter* (`{ _id, purchasedCredits: { $gte: cost } }` + `$inc: -cost`). A null result
-   means insufficient credits. Single-document atomicity means no transaction and no
-   lock is needed, and two concurrent requests can never both spend the last credits.
-4. Write `Generation` (`status: 'pending'`) and a negative `CreditTransaction`.
-5. Call the provider, upload the audio.
+3. Write `Generation` (`status: 'pending'`) with a snapshot of the voice, including the
+   multiplier the charge is about to be made at.
+4. **Reserve atomically**: one `findOneAndUpdate` with the balance condition *in the
+   filter* — `$expr: { $gte: [{ $add: ['$subscriptionCredits', '$purchasedCredits'] }, cost] }`
+   — and an aggregation-pipeline `$set` that drains subscription credits first. A null
+   result means insufficient credits. Single-document atomicity means no transaction and
+   no lock is needed, and two concurrent requests can never both spend the last credits.
+   The negative `CreditTransaction` rows (one per bucket touched) are written from the
+   pre-update document the same call returns.
+5. Call the provider, store the audio.
 6. Success → `completed`. Failure → **refund** via a compensating positive
-   `CreditTransaction` and `status: 'failed'`.
+   `CreditTransaction` per bucket and `status: 'failed'`.
+
+**Step 3 before step 4 is deliberate** and differs from an earlier draft of this section.
+`Generation.idempotencyKey` is uniquely indexed, so creating the row first means a retried
+request collides on that index *before* any credits move. Reserving first would put the
+money outside the guard.
 
 **Idempotency**: the client sends a request-scoped key; unique indexes on
 `Generation.idempotencyKey` and `CreditTransaction.idempotencyKey` make a double-click
 or a network retry a no-op instead of a double charge.
 
+**Refunds are claimed before they are paid**: a compare-and-set on
+`Generation.creditsRefunded` (0 → cost) decides who owns the refund, and the claim is
+released if the balance update then throws — so a failed refund stays retryable instead
+of being silently marked done.
+
 **Reconciliation**: `SUM(CreditTransaction.amount)` must always equal the user's stored
-balances. A reconciliation script exists from the moment the ledger does.
+balances. `creditsService.reconcile(userId)` exists from the moment the ledger does, and
+is asserted in the test suite.
 
 ---
 

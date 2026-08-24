@@ -12,15 +12,19 @@ import { TOKEN_TYPES, Token } from './token.model.js';
 /**
  * End-to-end tests for the auth routes, over real HTTP against a real MongoDB.
  *
- * They use a separate database (tts-saas-test) so they cannot touch development
- * data, and they skip themselves with a visible reason if MongoDB is not running
- * rather than failing - `npm test` stays useful without a database, and the
- * health tests next door need no database at all.
+ * They use a separate database (tts-saas-test-auth) so they cannot touch
+ * development data, and they skip themselves with a visible reason if MongoDB is
+ * not running rather than failing - `npm test` stays useful without a database,
+ * and the health tests next door need no database at all.
+ *
+ * One database per test FILE, not one shared test database: `node --test` runs
+ * files in parallel processes, so a shared database means one file's afterEach
+ * cleanup deletes another file's fixtures mid-test.
  *
  * Connecting here at the top level, before any describe() runs, is what lets the
  * skip reason be decided in time.
  */
-const TEST_DB = 'tts-saas-test';
+const TEST_DB = 'tts-saas-test-auth';
 
 let dbError = null;
 try {
@@ -83,7 +87,8 @@ async function call(path, { method = 'POST', body, token, cookie } = {}) {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(cookie ? { Cookie: `${REFRESH_COOKIE_NAME}=${cookie}` } : {}),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    // Spread rather than `body: undefined`, so a GET carries no body key at all.
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
   return { status: response.status, headers: response.headers, body: await response.json() };

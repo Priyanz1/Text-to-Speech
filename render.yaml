@@ -91,6 +91,30 @@ services:
       - key: RESEND_API_KEY
         sync: false
 
+      # Speech generation. Left as `mock` on purpose: with `google` and no key
+      # the process refuses to boot, and a first deploy should not depend on a
+      # billing account existing. Flip it to `google` in the dashboard once
+      # GOOGLE_SERVICE_ACCOUNT_JSON is set.
+      - key: TTS_PROVIDER
+        value: mock
+
+      # A Google Cloud service-account private key, as raw JSON on one line or
+      # base64. `sync: false` keeps it in the dashboard and out of git. The
+      # browser never sees it - only this service talks to Google.
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+
+      # Render's free plan has an EPHEMERAL filesystem: generated audio survives
+      # until the next deploy or restart, then vanishes. The Generation records
+      # remain, so the history is intact and only playback of old files breaks.
+      # Object storage (S3 or R2) is the fix when this matters; the storage
+      # adapter exists so that is one new file, not a rewrite.
+      - key: STORAGE_PROVIDER
+        value: local
+
+      # TTS_MAX_INPUT_BYTES and GENERATED_AUDIO_DIR use their defaults (4800
+      # bytes, under Google's 5000 ceiling, and server/tmp/audio).
+
       # ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL_DAYS, BCRYPT_COST, the two token
       # TTLs and COOKIE_SAMESITE are all left to their defaults. COOKIE_SAMESITE
       # matters most: unset, it resolves to `none` + Secure in production, which

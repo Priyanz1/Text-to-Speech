@@ -14,6 +14,31 @@ dotenv.config({ path: path.join(serverRoot, '.env'), quiet: true });
 // cause. Normalise it here rather than debugging it in production.
 const stripTrailingSlash = (value) => value.replace(/\/+$/, '');
 
+/**
+ * Reads a Google service account key out of an environment variable.
+ *
+ * Accepts the raw JSON or a base64 encoding of it. Base64 is what the README
+ * recommends: the `private_key` field is multi-line, and a multi-line value has
+ * to be quoted correctly in a .env file and pasted intact into a dashboard,
+ * which is the single easiest part of this setup to get wrong.
+ *
+ * Returns null for anything unusable, so the schema below can reject it at boot
+ * instead of the first generation request failing.
+ */
+function parseServiceAccount(raw) {
+  if (!raw) return null;
+
+  try {
+    const trimmed = raw.trim();
+    const json = trimmed.startsWith('{') ? trimmed : Buffer.from(trimmed, 'base64').toString('utf8');
+    const parsed = JSON.parse(json);
+
+    return parsed?.client_email && parsed?.private_key ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -73,6 +98,39 @@ const envSchema = z.object({
   // config/cookies.js - see the comment there, it is the single most likely
   // thing to break auth in production.
   COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none', '']).default(''),
+
+  // 'google' calls Google Cloud Text-to-Speech. 'mock' returns an audible tone of
+  // the right length without leaving the machine, so the whole credit path -
+  // reserve, charge, refund, download - is testable and demonstrable before any
+  // billing account exists. See integrations/ttsProvider.
+  TTS_PROVIDER: z.enum(['google', 'mock']).default('mock'),
+
+  /**
+   * The service account key, as raw JSON or base64. Required when
+   * TTS_PROVIDER=google.
+   *
+   * A key in an environment variable rather than GOOGLE_APPLICATION_CREDENTIALS
+   * pointing at a file, because Render has no filesystem to put a file on that
+   * is not also in the repository - and a service account key in the repository
+   * is the exact mistake .gitignore's `gcp-*.json` line exists to prevent.
+   */
+  GOOGLE_SERVICE_ACCOUNT_JSON: z
+    .string()
+    .default('')
+    .transform((raw) => (raw ? { raw, parsed: parseServiceAccount(raw) } : null)),
+
+  // Where generated audio is written. 'local' puts files under
+  // GENERATED_AUDIO_DIR; S3-compatible storage arrives with its own adapter.
+  STORAGE_PROVIDER: z.enum(['local']).default('local'),
+
+  // Relative to the server package root. Git-ignored (`tmp/`).
+  GENERATED_AUDIO_DIR: z.string().default('tmp/audio'),
+
+  // Hard ceiling on one request's input, in UTF-8 bytes. Google's synthesize
+  // endpoint rejects a request whose payload exceeds 5000 bytes; staying under
+  // it is our job, because a rejected call still costs a round trip and the
+  // error it returns is not one a user can act on.
+  TTS_MAX_INPUT_BYTES: z.coerce.number().int().min(100).max(5_000).default(4_800),
 });
 
 const parsed = envSchema
@@ -82,6 +140,22 @@ const parsed = envSchema
     path: ['RESEND_API_KEY'],
     message: 'RESEND_API_KEY is required when EMAIL_PROVIDER is "resend"',
   })
+  .refine((value) => value.TTS_PROVIDER !== 'google' || value.GOOGLE_SERVICE_ACCOUNT_JSON !== null, {
+    path: ['GOOGLE_SERVICE_ACCOUNT_JSON'],
+    message: 'GOOGLE_SERVICE_ACCOUNT_JSON is required when TTS_PROVIDER is "google"',
+  })
+  // Separate from the rule above so the two failures read differently: "you did
+  // not set it" and "what you set is not a usable key" need different fixes.
+  .refine(
+    (value) =>
+      value.GOOGLE_SERVICE_ACCOUNT_JSON === null ||
+      value.GOOGLE_SERVICE_ACCOUNT_JSON.parsed !== null,
+    {
+      path: ['GOOGLE_SERVICE_ACCOUNT_JSON'],
+      message:
+        'GOOGLE_SERVICE_ACCOUNT_JSON is not a service account key. Expected JSON (or base64 of it) containing client_email and private_key',
+    },
+  )
   .safeParse(process.env);
 
 if (!parsed.success) {
@@ -96,6 +170,11 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+// The parsed service account, or null when TTS_PROVIDER is not 'google'. Kept
+// separate from `env` so the credentials are reached through one named import
+// and are easy to grep for.
+export const googleServiceAccount = env.GOOGLE_SERVICE_ACCOUNT_JSON?.parsed ?? null;
 
 export const isProduction = env.NODE_ENV === 'production';
 export const isDevelopment = env.NODE_ENV === 'development';

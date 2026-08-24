@@ -234,3 +234,260 @@ button.primary:hover:not(:disabled) {
   font-size: 0.85rem;
   justify-self: start;
 }
+
+/* --- speech studio ------------------------------------------------------- */
+
+/* The dashboard carries a textarea and two side-by-side selects, which need more
+   room than a login form. Auth screens keep the narrower .shell. */
+.shell-wide {
+  max-width: 44rem;
+}
+
+textarea,
+select {
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  width: 100%;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 6rem;
+  line-height: 1.55;
+}
+
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+textarea:disabled,
+select:disabled {
+  opacity: 0.6;
+}
+
+.balance {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* Characters, bytes and price on one line: three numbers about the same text,
+   which is easier to read together than stacked. */
+.counters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+  margin-top: 0.35rem;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.counters-bad {
+  color: var(--bad);
+}
+
+.pickers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.pickers > div {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.player {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.player audio {
+  width: 100%;
+  display: block;
+}
+
+.player-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 0.75rem;
+}
+
+.download {
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.download:hover {
+  border-color: var(--accent);
+}
+
+@media (max-width: 32rem) {
+  .pickers {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- balance card -------------------------------------------------------- */
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.balance-card {
+  margin-top: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+}
+
+.balance-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.balance-value {
+  margin: 0.1rem 0 0;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.balance-split {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+}
+
+.balance-split > div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.balance-split dt {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.balance-split dd {
+  margin: 0;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.95rem;
+}
+
+/* --- history ------------------------------------------------------------- */
+
+.history {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.history-row {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.9rem 1rem;
+  background: var(--bg);
+}
+
+.history-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  margin: 0.6rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.history-refunded,
+.history-bad {
+  color: var(--bad);
+}
+
+.history-audio {
+  width: 100%;
+  display: block;
+  margin-top: 0.75rem;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.history-actions button {
+  font-size: 0.8rem;
+}
+
+button.danger {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+button.danger:hover:not(:disabled) {
+  border-color: var(--bad);
+  background: rgba(242, 119, 122, 0.12);
+}
+
+.retry {
+  margin-top: 0.75rem;
+  justify-self: start;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+

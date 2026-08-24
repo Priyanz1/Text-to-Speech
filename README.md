@@ -3,8 +3,9 @@
 Turn text into natural speech in many voices and languages. Users get free credits on
 signup, then buy credit packs or subscribe.
 
-**Current status: Phase 1 — deployment configuration complete.**
-There is no authentication, no speech generation, and no billing yet. See
+**Current status: Phases 5–7 — credits and speech generation complete.**
+Signup, credits and text-to-speech all work end to end. Billing is not built yet, and
+speech runs on a local mock provider until Google Cloud credentials are added. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan.
 
 ## Documentation
@@ -48,6 +49,16 @@ cd client && npm install && cp .env.example .env
 
 Then edit `server/.env` and set `MONGODB_URI` if you are not using a local MongoDB.
 
+Finally, seed the plan and voice catalog — without it there are no voices to pick and no
+free plan to grant credits from:
+
+```bash
+cd server && npm run seed
+```
+
+It is safe to re-run. Descriptive fields are refreshed; the numbers you may have edited
+(plan credits, per-request caps, voice cost multipliers) are written only on insert.
+
 ## Environment variables
 
 ### `server/.env`
@@ -70,6 +81,11 @@ Then edit `server/.env` and set `MONGODB_URI` if you are not using a local Mongo
 | `EMAIL_FROM` | no | Resend's sandbox address | Sender shown on outgoing email |
 | `RESEND_API_KEY` | only if `EMAIL_PROVIDER=resend` | *(empty)* | Boot fails with a readable error if the provider is `resend` and this is empty |
 | `COOKIE_SAMESITE` | no | *(empty → `lax` in dev, `none` in production)* | Override only if the client and API end up on the same domain, where `strict` becomes possible |
+| `TTS_PROVIDER` | no | `mock` | `mock` generates a playable WAV locally with no account and no cost. `google` calls Google Cloud Text-to-Speech |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | only if `TTS_PROVIDER=google` | *(empty)* | A service-account key, as raw JSON on one line **or** base64. Boot fails with a readable error if the provider is `google` and this is missing or unusable |
+| `STORAGE_PROVIDER` | no | `local` | Where generated audio is kept. Audio is never stored in MongoDB |
+| `GENERATED_AUDIO_DIR` | no | `tmp/audio` | Relative to `server/`. Git-ignored, and empties on every deploy on an ephemeral host |
+| `TTS_MAX_INPUT_BYTES` | no | `4800` | Request cap in **UTF-8 bytes** (Google's own ceiling is 5000). Credits are charged per *character* — see below |
 
 Generate a `JWT_SECRET` with:
 
@@ -103,13 +119,16 @@ cd client && npm run dev
 
 Then open <http://localhost:5173>. You land on the sign-in screen; create an account and
 the confirmation email is printed to the **server** terminal — copy the link from there.
-The dashboard shows your account plus the two health probes.
+Opening it confirms the address and grants the free credits, and the dashboard then has a
+working speech form. On `TTS_PROVIDER=mock` the audio is a two-tone chime, not speech —
+that is deliberate, so a mock can never be mistaken for the real provider.
 
 | Location | Script | What it does |
 |---|---|---|
 | `server` | `npm run dev` | Starts the API with `node --watch` (auto-restart on save) |
 | `server` | `npm start` | Starts the API without watching — production entry point |
 | `server` | `npm test` | Runs the test suite with Node's built-in runner |
+| `server` | `npm run seed` | Seeds the free plan and the voice catalog. Safe to re-run |
 | `client` | `npm run dev` | Vite dev server on port 5173 |
 | `client` | `npm run build` | Production build into `client/dist` |
 | `client` | `npm run preview` | Serves the built bundle locally |
@@ -193,6 +212,67 @@ Two things worth knowing before changing any of it:
 Verification and reset links point at the client (`CLIENT_URL`), which posts the token
 back to the API. With `EMAIL_PROVIDER=log` the whole email is printed to the server
 terminal, so both flows are testable locally with no account, domain or DNS.
+
+## Credits and speech generation
+
+| Method | Endpoint | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/api/plans` | — | Active plans. Public, for a future pricing page |
+| `GET` | `/api/credits/balance` | Bearer | `{ subscription, purchased, total }` |
+| `GET` | `/api/credits/ledger` | Bearer | Recent ledger rows. `?limit=` 1–200 |
+| `GET` | `/api/voices/languages` | Bearer | Languages with a voice count each |
+| `GET` | `/api/voices?language=en-US` | Bearer | Voices, filtered to the plan's allowed tiers |
+| `GET` | `/api/tts/config` | Bearer | The byte and character limits the form enforces |
+| `POST` | `/api/tts` | Bearer | `{ text, voiceId, idempotencyKey? }` → the generation and the new balance |
+| `GET` | `/api/tts/generations/:id/audio` | Bearer | The audio bytes. Ownership is checked in the query |
+
+Four things worth knowing before changing any of it:
+
+- **Credits are charged per character; the provider limit is per UTF-8 byte.** `café` is
+  4 characters and 5 bytes. Charging by bytes would bill a Hindi user roughly three times
+  an English user for the same sentence, so the two counts are tracked separately and the
+  form shows both.
+- **The deduction is one atomic update.** The balance condition lives in the query filter,
+  not in a read-then-write, so two concurrent requests can never both spend the last
+  credits. Subscription credits drain before purchased ones, and the split is recorded so
+  a refund returns each credit to the bucket it came from.
+- **Any failure after the charge refunds.** A user who was charged and got no audio is the
+  one outcome the generate path exists to prevent. Send an `idempotencyKey` and a
+  double-click or a network retry returns the first result instead of charging twice.
+- **Audio is not a public URL.** `GET .../audio` requires the access token, so the client
+  fetches it as a blob and hands the player an object URL. There is no presigned link to
+  leak, and no expiry to tune.
+
+## Google Cloud Text-to-Speech
+
+Everything above works on `TTS_PROVIDER=mock` with no Google account. To use real voices:
+
+1. Create a project at [console.cloud.google.com](https://console.cloud.google.com) and
+   **enable billing** on it — the API rejects requests from a project without it, even
+   inside the free tier.
+2. Enable the **Cloud Text-to-Speech API** for that project
+   (*APIs & Services → Library → search "Text-to-Speech"*).
+3. Create a **service account** (*IAM & Admin → Service Accounts*). It needs no project
+   role: the Text-to-Speech API authorizes on the `cloud-platform` scope, so a role would
+   grant more than this needs.
+4. On that service account, *Keys → Add key → Create new key → JSON*, and download it.
+   **Do not commit it.** The repository's `.gitignore` already excludes `*-service-account*.json`
+   and `gcp-*.json`, but the file belongs outside the repository.
+5. Put it in `server/.env` — base64 is easier to paste as one line and survives dashboard
+   forms without mangling newlines in the private key:
+
+```bash
+node -e "console.log(require('fs').readFileSync('/path/to/key.json','base64'))"
+```
+
+6. Set `TTS_PROVIDER=google` and `GOOGLE_SERVICE_ACCOUNT_JSON=<that string>`, then restart.
+   The boot log prints which provider is live.
+7. Optionally re-run `npm run seed` — it reads the real voice list from Google when the
+   provider is `google`, instead of the built-in mock catalog.
+
+No Google SDK is installed. The server signs a JWT assertion with the service account's
+private key, exchanges it for an hour-long access token, and caches it. The key never
+leaves the server, and the browser never sees a Google token.
 
 ## Deployment
 
