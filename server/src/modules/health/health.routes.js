@@ -1,8 +1,16 @@
 import { Router } from 'express';
 
-import { getHealth } from './health.controller.js';
+import { getLiveness, getReadiness } from './health.controller.js';
 
+/**
+ * Mounted at /api by src/routes/index.js, giving:
+ *   GET /api/health  liveness
+ *   GET /api/ready   readiness
+ *
+ * They are siblings rather than nested because they answer different questions
+ * for different consumers - see health.controller.js.
+ */
 export const healthRouter = Router();
 
-// Mounted at /api/health by src/routes/index.js
-healthRouter.get('/', getHealth);
+healthRouter.get('/health', getLiveness);
+healthRouter.get('/ready', getReadiness);

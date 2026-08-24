@@ -1,23 +1,27 @@
 import { createApp } from './app.js';
-import { env } from './config/env.js';
+import { env, isDevelopment } from './config/env.js';
 import { logger } from './config/logger.js';
 import { connectDatabase, disconnectDatabase } from './config/db.js';
+import { markShuttingDown } from './utils/lifecycle.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const app = createApp();
 
+// No host argument, so Node binds to all interfaces. Render routes to the
+// container's port and would not reach a server bound only to 127.0.0.1.
 const server = app.listen(env.PORT, () => {
-  logger.info(`Server listening on http://localhost:${env.PORT}`, {
-    environment: env.NODE_ENV,
-  });
+  logger.info(
+    isDevelopment ? `Server listening on http://localhost:${env.PORT}` : 'Server listening',
+    { port: env.PORT, environment: env.NODE_ENV },
+  );
 });
 
 // Connect to MongoDB *after* the server is listening, and do not treat failure
-// as fatal. The process stays up and GET /api/health reports 503 with
-// database: "disconnected", which is what a readiness probe needs to see.
+// as fatal. The process stays up, GET /api/health keeps returning 200 (the
+// process is fine), and GET /api/ready returns 503 (it cannot serve traffic).
 connectDatabase().catch((error) => {
-  logger.error('Initial MongoDB connection failed - /api/health will report degraded', {
+  logger.error('Initial MongoDB connection failed - /api/ready will report unavailable', {
     message: error.message,
   });
 });
@@ -27,6 +31,10 @@ let isShuttingDown = false;
 async function shutdown(reason) {
   if (isShuttingDown) return;
   isShuttingDown = true;
+
+  // Fail readiness immediately so a load balancer stops sending new requests
+  // here while the in-flight ones below are still finishing.
+  markShuttingDown();
 
   logger.info(`Shutting down (${reason})`);
 

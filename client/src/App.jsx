@@ -4,58 +4,86 @@ import { env } from './config/env.js';
 import { api } from './lib/apiClient.js';
 
 /**
- * Phase 0 placeholder screen.
+ * Phase 1 status screen.
  *
- * Its only job is to prove the full chain is wired up:
- * browser -> Vite dev server -> CORS -> Express -> MongoDB -> back again.
+ * Its job is to prove the deployed chain works end to end:
+ * browser -> Vercel -> CORS -> Render -> MongoDB Atlas -> back again.
+ *
+ * It calls both probes because they answer different questions, and seeing them
+ * separately is what makes a "the API is up but the database is not" situation
+ * readable at a glance.
  *
  * Phase 4 replaces this with the router and real screens, and moves data
- * fetching to TanStack Query (which handles caching, retries and cancellation
- * properly - deliberately not reinvented here).
+ * fetching to TanStack Query.
  */
+
+// Wraps a probe call so one failing does not hide the other's result. A 503 from
+// /api/ready is a useful answer, not an error - its body says why.
+async function probe(path) {
+  try {
+    const response = await api.get(path);
+    return { reachable: true, data: response.data, error: null };
+  } catch (error) {
+    return {
+      reachable: false,
+      data: error.payload?.data ?? null,
+      error: error.message,
+    };
+  }
+}
+
 export default function App() {
-  const [health, setHealth] = useState(null);
-  const [errorMessage, setErrorMessage] = useState(null);
+  const [liveness, setLiveness] = useState(null);
+  const [readiness, setReadiness] = useState(null);
   // Starts true because the effect below checks immediately on mount.
   const [isChecking, setIsChecking] = useState(true);
 
   // No setState before the first `await`: updating state synchronously inside
   // an effect starts a second render pass for no reason.
-  const runHealthCheck = useCallback(async () => {
-    try {
-      const response = await api.get('/api/health');
-      setHealth(response.data);
-      setErrorMessage(null);
-    } catch (error) {
-      // A 503 from /api/health is still useful: the body tells us the server
-      // is up but the database is not connected.
-      setHealth(error.payload?.data ?? null);
-      setErrorMessage(error.message);
-    } finally {
-      setIsChecking(false);
-    }
+  const runChecks = useCallback(async () => {
+    const [live, ready] = await Promise.all([probe('/api/health'), probe('/api/ready')]);
+    setLiveness(live);
+    setReadiness(ready);
+    setIsChecking(false);
   }, []);
 
   useEffect(() => {
-    // The lint rule cannot see that every setState in runHealthCheck happens
-    // after an await. Fetching on mount is the intended behaviour here, and
-    // Phase 4 hands this job to TanStack Query.
+    // The lint rule cannot see that every setState in runChecks happens after
+    // an await. Fetching on mount is the intended behaviour here, and Phase 4
+    // hands this job to TanStack Query.
     // eslint-disable-next-line react/set-state-in-effect
-    runHealthCheck();
-  }, [runHealthCheck]);
+    runChecks();
+  }, [runChecks]);
 
   function handleRecheck() {
     setIsChecking(true);
-    runHealthCheck();
+    runChecks();
   }
 
-  const state = isChecking ? 'unknown' : errorMessage ? 'bad' : 'good';
+  // The API being unreachable is the one failure worth showing prominently:
+  // everything else is a detail in the table below.
+  const connectionError = isChecking ? null : (liveness?.reachable ? null : liveness?.error);
+
+  const overall = isChecking
+    ? 'unknown'
+    : connectionError
+      ? 'bad'
+      : readiness?.reachable
+        ? 'good'
+        : 'bad';
+
+  const summary = isChecking
+    ? 'Contacting the API…'
+    : (connectionError ??
+      (readiness?.reachable
+        ? 'API reachable and ready to serve traffic'
+        : 'API is alive but not ready — check the database row below'));
 
   return (
     <main className="shell">
       <header className="header">
         <h1>AI Text&#8209;to&#8209;Speech</h1>
-        <p className="subtitle">Phase 0 &mdash; project foundation</p>
+        <p className="subtitle">Phase 1 &mdash; deployment</p>
       </header>
 
       <section className="card">
@@ -66,9 +94,9 @@ export default function App() {
           </button>
         </div>
 
-        <p className={`status status-${state}`}>
+        <p className={`status status-${overall}`}>
           <span className="dot" aria-hidden="true" />
-          {isChecking ? 'Contacting the API…' : (errorMessage ?? 'API reachable')}
+          {summary}
         </p>
 
         <dl className="facts">
@@ -77,20 +105,24 @@ export default function App() {
             <dd>{env.apiBaseUrl}</dd>
           </div>
           <div>
-            <dt>Server status</dt>
-            <dd>{health?.status ?? '—'}</dd>
+            <dt>Liveness (/api/health)</dt>
+            <dd>{liveness?.data?.status ?? (isChecking ? '…' : 'unreachable')}</dd>
+          </div>
+          <div>
+            <dt>Readiness (/api/ready)</dt>
+            <dd>{readiness?.data?.status ?? (isChecking ? '…' : 'unreachable')}</dd>
           </div>
           <div>
             <dt>Database</dt>
-            <dd>{health?.database ?? '—'}</dd>
+            <dd>{readiness?.data?.database ?? '—'}</dd>
           </div>
           <div>
             <dt>Server environment</dt>
-            <dd>{health?.environment ?? '—'}</dd>
+            <dd>{liveness?.data?.environment ?? '—'}</dd>
           </div>
           <div>
             <dt>Server uptime</dt>
-            <dd>{health ? `${health.uptimeSeconds}s` : '—'}</dd>
+            <dd>{liveness?.data ? `${liveness.data.uptimeSeconds}s` : '—'}</dd>
           </div>
           <div>
             <dt>Client mode</dt>

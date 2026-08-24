@@ -3,7 +3,7 @@
 Turn text into natural speech in many voices and languages. Users get free credits on
 signup, then buy credit packs or subscribe.
 
-**Current status: Phase 0 complete — project foundation only.**
+**Current status: Phase 1 — deployment configuration complete.**
 There is no authentication, no speech generation, and no billing yet. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for the phase plan.
 
@@ -13,6 +13,7 @@ There is no authentication, no speech generation, and no billing yet. See
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System shape, modules, data models, auth / credit / payment strategy, security concerns |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | What is locked, and what must stay configurable — read before hard-coding anything |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Render / Vercel / Atlas setup, secrets handling, CORS across real domains, rollback |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phase-by-phase build order and status |
 
 ## Tech stack
@@ -23,9 +24,10 @@ React 19 (Vite) · Node 22 · Express 5 · MongoDB with Mongoose · JavaScript (
 
 ```
 Text-to-Speech/
-├── docs/       architecture, decisions, roadmap
-├── client/     React frontend (Vite)
-└── server/     Express API
+├── docs/          architecture, decisions, deployment, roadmap
+├── client/        React frontend (Vite) — deploys to Vercel
+├── server/        Express API — deploys to Render
+└── render.yaml    Render service definition
 ```
 
 ## Prerequisites
@@ -53,9 +55,10 @@ Then edit `server/.env` and set `MONGODB_URI` if you are not using a local Mongo
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `NODE_ENV` | no | `development` | `development` \| `test` \| `production` |
-| `PORT` | no | `4000` | Port the API listens on |
+| `PORT` | no | `4000` | Port the API listens on. Render injects its own |
 | `MONGODB_URI` | **yes** | — | Connection string. No default on purpose: a wrong database is worse than a missing one |
-| `CLIENT_URL` | no | `http://localhost:5173` | The one browser origin CORS allows. No trailing slash |
+| `CLIENT_URL` | no | `http://localhost:5173` | The canonical browser origin. Trailing slashes are stripped automatically |
+| `CORS_EXTRA_ORIGINS` | no | *(empty)* | Comma-separated extra origins allowed through CORS. For Vercel preview URLs |
 | `LOG_LEVEL` | no | `info` | `error` \| `warn` \| `info` \| `debug` |
 
 The server validates these on boot and **exits with a readable list of problems** if
@@ -82,19 +85,27 @@ cd server && npm run dev
 cd client && npm run dev
 ```
 
-Then open <http://localhost:5173>. The page calls `GET /api/health` and shows whether
-the API and database are reachable.
+Then open <http://localhost:5173>. The page calls both health probes and shows
+whether the API and database are reachable.
 
 | Location | Script | What it does |
 |---|---|---|
 | `server` | `npm run dev` | Starts the API with `node --watch` (auto-restart on save) |
 | `server` | `npm start` | Starts the API without watching — production entry point |
+| `server` | `npm test` | Runs the test suite with Node's built-in runner |
 | `client` | `npm run dev` | Vite dev server on port 5173 |
 | `client` | `npm run build` | Production build into `client/dist` |
 | `client` | `npm run preview` | Serves the built bundle locally |
 | `client` | `npm run lint` | Runs oxlint |
 
-## Health check
+## Health probes
+
+Two endpoints, because they answer different questions:
+
+| Endpoint | Answers | Returns |
+|---|---|---|
+| `GET /api/health` | Is the process alive? | Always **200** while the process runs. Never touches MongoDB |
+| `GET /api/ready` | Can it serve traffic? | **200** when MongoDB is connected, **503** when it is not or during shutdown |
 
 ```bash
 curl http://localhost:4000/api/health
@@ -104,21 +115,46 @@ curl http://localhost:4000/api/health
 {
   "success": true,
   "data": {
-    "status": "ok",
+    "status": "alive",
     "environment": "development",
-    "database": "connected",
     "uptimeSeconds": 12,
-    "timestamp": "2026-08-23T00:00:00.000Z"
+    "timestamp": "2026-08-24T00:00:00.000Z"
   }
 }
 ```
 
-Returns **200** when MongoDB is connected and **503** with `"database": "disconnected"`
-when it is not. The 503 is deliberate — a hosting platform's readiness probe should pull
-an unhealthy instance out of rotation instead of sending it requests that will fail.
+```bash
+curl http://localhost:4000/api/ready
+```
 
-The server starts listening *before* connecting to MongoDB, so a database problem shows
-up as a truthful health response rather than a process that refuses to boot.
+```json
+{
+  "success": true,
+  "data": {
+    "status": "ready",
+    "database": "connected",
+    "draining": false,
+    "environment": "development",
+    "uptimeSeconds": 12,
+    "timestamp": "2026-08-24T00:00:00.000Z"
+  }
+}
+```
+
+Liveness deliberately ignores MongoDB. A hosting platform **restarts** an instance
+that fails its health check, and restarting the API cannot fix a database outage —
+it would just add a restart loop on top of one. Readiness is the endpoint that
+reports a dependency failure, for a load balancer that should **drain** traffic
+instead.
+
+The server starts listening *before* connecting to MongoDB, so a database problem
+shows up as a truthful readiness response rather than a process that refuses to boot.
+
+## Deployment
+
+The API deploys to Render (see [render.yaml](render.yaml)) and the client to Vercel,
+with MongoDB Atlas as the database. Full runbook, including secrets handling and the
+CORS-across-real-domains details, in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Conventions
 

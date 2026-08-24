@@ -1,0 +1,72 @@
+# Render Blueprint - infrastructure as code for the API.
+#
+# Why a blueprint instead of clicking through the dashboard: the deploy
+# configuration is reviewable in a pull request, and it can be recreated exactly
+# if the service is ever deleted or moved to another account.
+#
+# To use: Render dashboard -> New -> Blueprint -> pick this repository.
+# Render reads this file from the repository root.
+#
+# The client is NOT here. It is a static React app deployed to Vercel, which is
+# better at that job (global CDN, preview deployments per branch).
+
+services:
+  - type: web
+    name: tts-saas-api
+    runtime: node
+
+    # Free instances sleep after ~15 minutes of inactivity and take 30-60s to
+    # wake. Fine for now; upgrade before real users arrive.
+    plan: free
+
+    # Closest Render region to India. Keep the MongoDB Atlas region matching -
+    # every query pays that round trip, so API-to-database distance costs more
+    # than user-to-API distance.
+    region: singapore
+
+    # The repository root holds both packages, so point Render at the server.
+    rootDir: server
+
+    # `npm ci` not `npm install`: it installs exactly what package-lock.json
+    # says, so a deploy can never silently pick up a different version.
+    buildCommand: npm ci
+    startCommand: npm start
+
+    # LIVENESS, deliberately - not /api/ready.
+    #
+    # Render restarts an instance that fails this check. Restarting the API
+    # cannot fix a MongoDB outage, so pointing this at a database-dependent
+    # endpoint would turn a database blip into a restart loop. /api/health
+    # answers only "is this process alive", which is the question Render is
+    # really asking.
+    healthCheckPath: /api/health
+
+    autoDeploy: true
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: LOG_LEVEL
+        value: info
+
+      # `sync: false` means: this key is declared here, but its VALUE is set in
+      # the Render dashboard and never stored in git. This is how the Atlas
+      # credentials stay out of the repository.
+      - key: MONGODB_URI
+        sync: false
+
+      # The deployed frontend origin, e.g. https://your-app.vercel.app
+      # No trailing slash. Set in the dashboard so a domain change needs no
+      # commit.
+      - key: CLIENT_URL
+        sync: false
+
+      # Optional. Comma-separated extra origins allowed through CORS - used for
+      # Vercel preview deployments. Leave unset in production if you do not
+      # want preview builds talking to the production database.
+      - key: CORS_EXTRA_ORIGINS
+        sync: false
+
+    # PORT is intentionally absent: Render injects it, and src/config/env.js
+    # reads whatever it is given.

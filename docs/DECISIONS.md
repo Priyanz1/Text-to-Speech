@@ -3,7 +3,7 @@
 Living record of what is settled and — just as importantly — what is deliberately
 still open. Nothing in the codebase should assume an "Open decision" has an answer.
 
-Last updated: 2026-08-23 (end of Phase 0)
+Last updated: 2026-08-24 (end of Phase 1)
 
 ---
 
@@ -24,6 +24,13 @@ Last updated: 2026-08-23 (end of Phase 0)
 | Ledger | Append-only `CreditTransaction` is the source of truth; the balance on `User` is a cache | |
 | Webhooks | The webhook is the only thing that may grant credits. Never the browser redirect. | |
 | Webhook idempotency | Every Razorpay event is processed **exactly once**, enforced by a unique index on the provider event id | Requirement is locked; implementation is Phase 10, not Phase 0 |
+| API hosting | **Render**, free tier for now, Singapore region | Runs a long-lived process and sends a real SIGTERM, which graceful shutdown depends on. Config lives in `render.yaml` so it is reviewable, not dashboard-only |
+| Client hosting | **Vercel**, root directory `client` | Static build on a CDN, plus a preview URL per branch |
+| Database hosting | **MongoDB Atlas** M0, Singapore region | Colocated with the API: every query pays that round trip, so it matters more than user-to-API distance |
+| Health probes | **Liveness `/api/health`** (always 200 while the process runs) and **readiness `/api/ready`** (503 when MongoDB is disconnected or during shutdown) | Different questions with different platform responses: restart vs drain. Render's health check points at liveness so a database outage cannot cause a restart loop |
+| CORS allowlist | `CLIENT_URL` (single canonical origin) plus optional `CORS_EXTRA_ORIGINS` | `CLIENT_URL` stays single-valued because Phase 3 needs one URL for email links. The extra list exists for Vercel preview hostnames, which change per branch |
+| No dev proxy | Client and API are cross-origin locally too | Keeps development honest: a CORS mistake fails on localhost rather than waiting for production |
+| Test runner | Node's built-in `node:test` | No new dependency. Run with `npm test` in `server/` |
 
 ---
 
@@ -86,6 +93,11 @@ is open.
 
 ## Deferred (not open questions, just later work)
 
+- **Atlas network allowlist is `0.0.0.0/0`** — Render's free tier has no static
+  outbound IP, so there is no address to allowlist. Security rests on a strong unique
+  credential plus enforced TLS. This is a genuine widening of the attack surface and
+  is on the Phase 12 pre-launch list: either move to a Render tier with static egress,
+  or accept it explicitly. See [DEPLOYMENT.md](./DEPLOYMENT.md) §3.
 - Google OAuth sign-in — after v1
 - Long-text chunking and a job queue (Redis/BullMQ) — v2
 - SSML / speed / pitch controls — v2

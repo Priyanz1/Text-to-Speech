@@ -14,7 +14,7 @@ Each phase ends deployable and manually testable. Status is updated as phases co
 | Phase | Scope | Status |
 |---|---|---|
 | **0** | Repo, `/client` + `/server`, Zod-validated env, Mongo connection, logger, CORS, JSON parsing, centralized error handler, 404 handler, `GET /api/health`, graceful shutdown | **Done** — 2026-08-23 |
-| **1** | Deploy the empty shells: API to Render, client to Vercel, MongoDB Atlas, CORS working across real domains | Not started |
+| **1** | Deploy the empty shells: API to Render, client to Vercel, MongoDB Atlas, CORS working across real domains. Liveness (`/api/health`) split from readiness (`/api/ready`) | **Code done** — 2026-08-24. Hosting accounts pending |
 | **2** | `User` model, signup, login, logout, refresh-token rotation, `requireAuth`. Tested with a REST client only, no UI | Not started |
 | **3** | Email provider + domain DNS (SPF/DKIM/DMARC), email verification, forgot/reset password | Not started |
 | **4** | React app shell: router, `AuthProvider`, api client with 401 → refresh → retry, all auth screens, profile page | Not started |
@@ -53,3 +53,15 @@ See [DECISIONS.md](./DECISIONS.md) §1 and §2 — none of these values may be h
 
 No authentication, no `User` model, no TTS, no Google Cloud SDK, no Razorpay, no payment
 or subscription models, no credit logic, no Docker, no Redis, no TypeScript.
+
+---
+
+## What Phase 1 deliberately does not contain
+
+No helmet or rate limiting (Phase 9 — deploying does not require them, and adding
+them here would mean shipping security middleware that nothing yet protects), no
+Docker (Render builds from the repository directly; a Dockerfile would be a second
+build definition to keep in sync for no gain at this size), no CI pipeline, no
+staging environment, and no new runtime dependencies. The tests use Node's built-in
+`node:test` runner.
+

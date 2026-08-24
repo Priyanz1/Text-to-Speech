@@ -21,6 +21,32 @@ Express API  ──> MongoDB (Atlas)          state, ledger, history
 Two deployables: a static client and a stateless API. The API holds no session state
 in memory, so it can be scaled to multiple instances without change.
 
+**Where each part runs** (details in [DEPLOYMENT.md](./DEPLOYMENT.md)):
+
+```
+Vercel (CDN)          static React build, one preview URL per branch
+Render (Singapore)    the Express process, restarted on liveness failure
+Atlas M0 (Singapore)  MongoDB, colocated with the API to keep query latency low
+```
+
+The client and the API are on **different origins in development too** — there is no
+Vite dev proxy — so a CORS mistake surfaces on localhost instead of in production.
+
+### Health probes
+
+Two endpoints, because "is it alive" and "should it get traffic" call for different
+responses from the platform:
+
+| Endpoint | Answers | Returns 503 when | Platform should |
+|---|---|---|---|
+| `GET /api/health` | Is the process alive? | Never (only failing to respond at all) | Restart the instance |
+| `GET /api/ready` | Can it serve traffic? | MongoDB is disconnected, or shutdown has begun | Drain traffic, leave it running |
+
+Liveness must not depend on MongoDB. Restarting the API cannot fix a database
+outage, so a database-dependent liveness check converts an outage into a restart
+loop. Graceful shutdown marks readiness as unavailable *before* closing
+connections, so traffic drains while in-flight requests finish.
+
 ---
 
 ## 2. Release scope
@@ -46,18 +72,18 @@ which is what makes the credit and billing rules testable in isolation.
 
 ```
 server/src/
-  config/        env (Zod-validated), db, logger
+  config/        env (Zod-validated), db, logger, cors
   middleware/    requestLogger, notFound, errorHandler
                  + later: requireAuth, requireRole, validate, rateLimit
   routes/        mounts every module under /api
   modules/       feature folders, each: <name>.routes.js / .controller.js
                  / .service.js / .model.js / .validation.js
-    health/      (Phase 0)
+    health/      (Phase 0-1) liveness + readiness
     auth/ users/ voices/ tts/ generations/ credits/ plans/ billing/
     webhooks/ admin/
   integrations/  ttsProvider/  storage/  email/  payments/
   jobs/          credit renewal, expired-audio cleanup, webhook reconciliation
-  utils/         ApiError, token hashing, cost calculation
+  utils/         ApiError, lifecycle, token hashing, cost calculation
 ```
 
 **The one abstraction that earns its keep is `integrations/ttsProvider`** — an interface

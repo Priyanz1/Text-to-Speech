@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 
-import { env } from './config/env.js';
+import { corsOptions } from './config/cors.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { notFound } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -22,18 +22,14 @@ export function createApp() {
   // Do not advertise the framework in response headers.
   app.disable('x-powered-by');
 
-  // Render, Railway and Fly all sit behind a proxy. Without this, req.ip is the
-  // proxy's address, which would make per-IP rate limiting (Phase 9) useless.
+  // Render terminates TLS and forwards to us over HTTP, so without this
+  // req.ip is the proxy's address (making Phase 9 per-IP rate limiting
+  // useless) and req.protocol is "http" (which would break Secure cookies in
+  // Phase 2). The value is the number of proxies in front of us: Render is 1.
   app.set('trust proxy', 1);
 
-  // Only our own frontend may call this API from a browser.
-  // `credentials: true` is required for the refresh-token cookie in Phase 2.
-  app.use(
-    cors({
-      origin: env.CLIENT_URL,
-      credentials: true,
-    }),
-  );
+  // Which browser origins may call this API. See config/cors.js.
+  app.use(cors(corsOptions));
 
   // Cap the body size. The default is 100kb; 1mb leaves room for the long text
   // payloads the TTS endpoint will accept later without allowing huge uploads.
