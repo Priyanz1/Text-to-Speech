@@ -44,9 +44,45 @@ const envSchema = z.object({
     .transform((origins) => origins.map(stripTrailingSlash)),
 
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
+
+  // Signs access tokens. No default on purpose: a fallback secret is the kind of
+  // thing that quietly ships to production and makes every token forgeable.
+  // Generate one with:  node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
+  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
+
+  // Access tokens are deliberately short-lived: they cannot be revoked, so their
+  // lifetime *is* the revocation window. The refresh token carries the session.
+  ACCESS_TOKEN_TTL: z.string().default('15m'),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+
+  // bcrypt work factor. Configurable so tests can drop it - hashing at cost 12
+  // takes hundreds of milliseconds by design, which would dominate a test run.
+  BCRYPT_COST: z.coerce.number().int().min(4).max(15).default(12),
+
+  // How long a link in an email stays valid, in minutes.
+  VERIFY_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).default(1_440),
+  RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).default(60),
+
+  // 'log' prints the email (including the link) to the server log, which is all
+  // local development needs. 'resend' actually sends it. See integrations/email.
+  EMAIL_PROVIDER: z.enum(['log', 'resend']).default('log'),
+  EMAIL_FROM: z.string().default('AI Text-to-Speech <onboarding@resend.dev>'),
+  RESEND_API_KEY: z.string().default(''),
+
+  // Cross-site cookie behaviour. Left blank, this resolves per environment in
+  // config/cookies.js - see the comment there, it is the single most likely
+  // thing to break auth in production.
+  COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none', '']).default(''),
 });
 
-const parsed = envSchema.safeParse(process.env);
+const parsed = envSchema
+  // Cross-field rules. Catching these at boot beats discovering them the first
+  // time a user asks for a password reset.
+  .refine((value) => value.EMAIL_PROVIDER !== 'resend' || value.RESEND_API_KEY.length > 0, {
+    path: ['RESEND_API_KEY'],
+    message: 'RESEND_API_KEY is required when EMAIL_PROVIDER is "resend"',
+  })
+  .safeParse(process.env);
 
 if (!parsed.success) {
   // Deliberately console.error and not the logger: the logger imports this

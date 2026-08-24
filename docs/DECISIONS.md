@@ -3,7 +3,7 @@
 Living record of what is settled and — just as importantly — what is deliberately
 still open. Nothing in the codebase should assume an "Open decision" has an answer.
 
-Last updated: 2026-08-24 (end of Phase 1)
+Last updated: 2026-08-24 (end of Phase 2 — authentication)
 
 ---
 
@@ -19,6 +19,12 @@ Last updated: 2026-08-24 (end of Phase 1)
 | Credit unit | 1 credit = 1 character of input text | Provider bills per character, so this keeps unit economics computable |
 | Money storage | Integer minor units (paise), never floats | |
 | Auth | Short-lived JWT access token (memory) + rotating opaque refresh token in an httpOnly cookie | Reuse detection revokes the token family |
+| Refresh cookie `SameSite` | `lax` in development, **`none` + `Secure` in production**, overridable with `COOKIE_SAMESITE` | Supersedes the flat "Lax" in [ARCHITECTURE.md](./ARCHITECTURE.md) §6. Vercel and Render are different sites, and a `Lax` cookie is not sent on a cross-site `fetch` — refresh would fail in production while working perfectly on localhost (`SameSite` ignores the port, so `:5173` and `:4000` are same-site). CSRF resistance comes from the access token being a `Authorization` header, which a forged cross-site request cannot set; the override exists for a future single-domain setup |
+| Refresh cookie scope | `Path=/api/auth` | The only routes that read it. Every other request carries the cookie for no reason otherwise |
+| Password hashing | `bcryptjs` at cost 12 (`BCRYPT_COST`) | Pure JS, so no `node-gyp` build on Windows or Render's free tier. Passwords are rejected above 72 bytes rather than silently truncated to what bcrypt actually hashes |
+| Token storage | One `tokens` collection for refresh / email-verify / password-reset, storing **SHA-256 hashes** with a TTL index | Nothing to guess about 256 random bits, so a slow hash buys nothing; a deterministic hash allows the indexed lookup bcrypt's per-hash salt would prevent. Reads still check `expiresAt` — Mongo's TTL monitor only sweeps about once a minute |
+| Account enumeration | Signup, resend-verification and forgot-password return **identical** responses whether or not the address is registered | So signup cannot issue a session either: for a new address that would leak the answer back, and for an existing one it would be account takeover. The real owner is told by the "you already have an account" email instead |
+| Unverified sign-in | Allowed | Verification gates the free credit grant (Phase 5), not access. Locking people out of the product to protect a credit grant is the wrong trade |
 | Free credits | Granted only *after* email verification | Blocks throwaway-email farming |
 | Audio storage | S3-compatible object storage, served via short-lived presigned URLs | Never store audio in MongoDB, never use a public bucket |
 | Ledger | Append-only `CreditTransaction` is the source of truth; the balance on `User` is a cache | |
@@ -93,6 +99,11 @@ is open.
 
 ## Deferred (not open questions, just later work)
 
+- **Login and password-reset rate limiting** — deliberately not built in Phase 2. Every
+  other brute-force defence is in place (bcrypt cost 12, identical failure messages,
+  equal timing for present and absent accounts, single-use tokens), but nothing yet
+  caps attempts per IP or per address. It needs a dependency and a store, and it lands
+  with the rest of the hardening work in Phase 9.
 - **Atlas network allowlist is `0.0.0.0/0`** — Render's free tier has no static
   outbound IP, so there is no address to allowlist. Security rests on a strong unique
   credential plus enforced TLS. This is a genuine widening of the attack surface and

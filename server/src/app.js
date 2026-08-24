@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 
 import { corsOptions } from './config/cors.js';
 import { requestLogger } from './middleware/requestLogger.js';
@@ -14,7 +15,7 @@ import { apiRouter } from './routes/index.js';
  * tests can create an app instance without binding a port or opening sockets.
  *
  * Middleware order matters and reads top to bottom:
- *   CORS -> body parsing -> request logging -> routes -> 404 -> error handler
+ *   CORS -> body parsing -> cookies -> request logging -> routes -> 404 -> errors
  */
 export function createApp() {
   const app = express();
@@ -34,6 +35,10 @@ export function createApp() {
   // Cap the body size. The default is 100kb; 1mb leaves room for the long text
   // payloads the TTS endpoint will accept later without allowing huge uploads.
   app.use(express.json({ limit: '1mb' }));
+
+  // Populates req.cookies. Only the refresh token lives in a cookie, and only
+  // /api/auth ever receives it - see config/cookies.js.
+  app.use(cookieParser());
 
   app.use(requestLogger);
 

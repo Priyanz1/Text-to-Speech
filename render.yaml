@@ -68,5 +68,33 @@ services:
       - key: CORS_EXTRA_ORIGINS
         sync: false
 
+      # Signs access tokens. `generateValue: true` has Render mint a random
+      # value on first deploy and keep it thereafter, so it never exists in git
+      # and nobody has to invent one.
+      #
+      # Changing it later signs everyone out - every issued access token stops
+      # verifying. Refresh tokens are unaffected (they are opaque, not signed),
+      # so the next refresh quietly repairs the session.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Email delivery. Leave EMAIL_PROVIDER as `log` until a Resend account and
+      # a verified sending domain exist - with `resend` and no API key the
+      # process refuses to boot, which is the intended behaviour but a confusing
+      # first deploy. Set EMAIL_FROM to an address on the verified domain.
+      - key: EMAIL_PROVIDER
+        value: log
+
+      - key: EMAIL_FROM
+        sync: false
+
+      - key: RESEND_API_KEY
+        sync: false
+
+      # ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL_DAYS, BCRYPT_COST, the two token
+      # TTLs and COOKIE_SAMESITE are all left to their defaults. COOKIE_SAMESITE
+      # matters most: unset, it resolves to `none` + Secure in production, which
+      # is what lets the Vercel client send the refresh cookie to Render at all.
+
     # PORT is intentionally absent: Render injects it, and src/config/env.js
     # reads whatever it is given.

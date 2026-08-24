@@ -60,6 +60,22 @@ Then edit `server/.env` and set `MONGODB_URI` if you are not using a local Mongo
 | `CLIENT_URL` | no | `http://localhost:5173` | The canonical browser origin. Trailing slashes are stripped automatically |
 | `CORS_EXTRA_ORIGINS` | no | *(empty)* | Comma-separated extra origins allowed through CORS. For Vercel preview URLs |
 | `LOG_LEVEL` | no | `info` | `error` \| `warn` \| `info` \| `debug` |
+| `JWT_SECRET` | **yes** | — | Signs access tokens. At least 32 characters. No default on purpose: a fallback secret is the kind of thing that quietly ships to production and makes every token forgeable |
+| `ACCESS_TOKEN_TTL` | no | `15m` | Any [ms](https://github.com/vercel/ms) duration. Short by design — the refresh token is what keeps people signed in |
+| `REFRESH_TOKEN_TTL_DAYS` | no | `30` | How long a session survives without a sign-in |
+| `BCRYPT_COST` | no | `12` | Password hashing rounds. Lower is faster and weaker; do not lower it in production |
+| `VERIFY_TOKEN_TTL_MINUTES` | no | `1440` (24h) | Lifetime of an email confirmation link |
+| `RESET_TOKEN_TTL_MINUTES` | no | `60` | Lifetime of a password reset link |
+| `EMAIL_PROVIDER` | no | `log` | `log` prints emails to the terminal (no account needed). `resend` sends them for real |
+| `EMAIL_FROM` | no | Resend's sandbox address | Sender shown on outgoing email |
+| `RESEND_API_KEY` | only if `EMAIL_PROVIDER=resend` | *(empty)* | Boot fails with a readable error if the provider is `resend` and this is empty |
+| `COOKIE_SAMESITE` | no | *(empty → `lax` in dev, `none` in production)* | Override only if the client and API end up on the same domain, where `strict` becomes possible |
+
+Generate a `JWT_SECRET` with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
+```
 
 The server validates these on boot and **exits with a readable list of problems** if
 anything is missing or malformed.
@@ -85,8 +101,9 @@ cd server && npm run dev
 cd client && npm run dev
 ```
 
-Then open <http://localhost:5173>. The page calls both health probes and shows
-whether the API and database are reachable.
+Then open <http://localhost:5173>. You land on the sign-in screen; create an account and
+the confirmation email is printed to the **server** terminal — copy the link from there.
+The dashboard shows your account plus the two health probes.
 
 | Location | Script | What it does |
 |---|---|---|
@@ -149,6 +166,33 @@ instead.
 
 The server starts listening *before* connecting to MongoDB, so a database problem
 shows up as a truthful readiness response rather than a process that refuses to boot.
+
+## Authentication
+
+| Method | Endpoint | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/api/auth/signup` | — | Create an account and email a confirmation link. Returns a message, never a session |
+| `POST` | `/api/auth/login` | — | Access token in the body, refresh token in an `httpOnly` cookie |
+| `POST` | `/api/auth/refresh` | refresh cookie | Rotates the refresh token and issues a new access token |
+| `POST` | `/api/auth/logout` | refresh cookie | Revokes the whole session family and clears the cookie |
+| `GET` | `/api/auth/me` | Bearer | The signed-in user |
+| `POST` | `/api/auth/verify-email` | — | `{ token }` from the emailed link |
+| `POST` | `/api/auth/resend-verification` | — | New confirmation link; retires the previous one |
+| `POST` | `/api/auth/forgot-password` | — | Emails a reset link |
+| `POST` | `/api/auth/reset-password` | — | `{ token, password }`; revokes every existing session |
+
+Two things worth knowing before changing any of it:
+
+- **The access token never touches `localStorage`.** It lives in a module variable in
+  [client/src/lib/apiClient.js](client/src/lib/apiClient.js), so an XSS bug has nothing to
+  read and a closed tab loses it. A reload recovers the session from the refresh cookie.
+- **Signup, resend-verification and forgot-password answer identically** whether or not
+  the address is registered. That is deliberate, and it is why signup cannot return a
+  session. Do not "improve" the messages to be more specific.
+
+Verification and reset links point at the client (`CLIENT_URL`), which posts the token
+back to the API. With `EMAIL_PROVIDER=log` the whole email is printed to the server
+terminal, so both flows are testable locally with no account, domain or DNS.
 
 ## Deployment
 

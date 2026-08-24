@@ -15,9 +15,9 @@ Each phase ends deployable and manually testable. Status is updated as phases co
 |---|---|---|
 | **0** | Repo, `/client` + `/server`, Zod-validated env, Mongo connection, logger, CORS, JSON parsing, centralized error handler, 404 handler, `GET /api/health`, graceful shutdown | **Done** — 2026-08-23 |
 | **1** | Deploy the empty shells: API to Render, client to Vercel, MongoDB Atlas, CORS working across real domains. Liveness (`/api/health`) split from readiness (`/api/ready`) | **Code done** — 2026-08-24. Hosting accounts pending |
-| **2** | `User` model, signup, login, logout, refresh-token rotation, `requireAuth`. Tested with a REST client only, no UI | Not started |
-| **3** | Email provider + domain DNS (SPF/DKIM/DMARC), email verification, forgot/reset password | Not started |
-| **4** | React app shell: router, `AuthProvider`, api client with 401 → refresh → retry, all auth screens, profile page | Not started |
+| **2** | `User` model, signup, login, logout, refresh-token rotation, `requireAuth`. Tested with a REST client only, no UI | **Done** — 2026-08-24 |
+| **3** | Email provider + domain DNS (SPF/DKIM/DMARC), email verification, forgot/reset password | **Code done** — 2026-08-24. Runs on `EMAIL_PROVIDER=log` locally; Resend account + domain DNS pending |
+| **4** | React app shell: router, `AuthProvider`, api client with 401 → refresh → retry, all auth screens, profile page | **Done** — 2026-08-24, except the profile page (the dashboard shows the account read-only; editing it is not needed until there is something to edit) |
 | **5** | **Credit engine, standalone**: ledger, two buckets, atomic reserve/commit/refund, idempotency, signup bonus on verification, balance + ledger UI, reconciliation script | Not started |
 | **6** | `ttsProvider` + storage adapters, voice catalog seeded from Google, presigned URLs, one hardcoded synthesis proven end to end | Not started |
 | **7** | Wire together: `POST /api/tts` = validate → reserve → synthesize → upload → commit (refund on failure). Studio UI with char/byte counter and cost estimate | Not started |
@@ -64,4 +64,25 @@ Docker (Render builds from the repository directly; a Dockerfile would be a seco
 build definition to keep in sync for no gain at this size), no CI pipeline, no
 staging environment, and no new runtime dependencies. The tests use Node's built-in
 `node:test` runner.
+
+---
+
+## What Phases 2–4 deliberately do not contain
+
+Built in one pass, because the three phases only become testable together: an auth API
+with no UI has to be exercised by hand, and a login screen with nothing behind it proves
+nothing.
+
+Left out on purpose:
+
+- **Rate limiting on login and password reset** — Phase 9, with the rest of the
+  hardening. See [DECISIONS.md](./DECISIONS.md) "Deferred".
+- **TanStack Query** — the only fetches so far are the two health probes and the session
+  bootstrap. A cache layer arrives with Phase 5's balance and ledger, which actually need
+  invalidation.
+- **Google OAuth, 2FA, "remember me", account deletion, email change** — after v1.
+- **A profile page** — the dashboard already shows the account; there is nothing editable
+  until later phases add settings.
+- **HTML email** — plain text renders everywhere and has nothing to break. The templates
+  file is the one place to add HTML later.
 

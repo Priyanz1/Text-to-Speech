@@ -91,7 +91,7 @@ so it is reviewable in a pull request rather than buried in a dashboard.
 **Deploy:** Render dashboard → **New** → **Blueprint** → select this repository.
 Render reads `render.yaml` and creates the service.
 
-**Then set the three dashboard values** (declared `sync: false`, so Render prompts
+**Then set the dashboard values** (declared `sync: false`, so Render prompts
 for them):
 
 | Variable | Value |
@@ -99,10 +99,51 @@ for them):
 | `MONGODB_URI` | The Atlas connection string from step 3 |
 | `CLIENT_URL` | The Vercel production URL, no trailing slash |
 | `CORS_EXTRA_ORIGINS` | Leave empty for now |
+| `EMAIL_FROM` | Leave empty until a sending domain is verified — see §Email below |
+| `RESEND_API_KEY` | Leave empty until then too |
+
+`JWT_SECRET` is **not** in that list: `render.yaml` declares it `generateValue: true`,
+so Render mints a random value on first deploy and keeps it. Nothing to set, and it
+never exists in git.
 
 `CLIENT_URL` is a chicken-and-egg problem on the first deploy: you do not know the
 Vercel URL until the client is deployed, and the client needs the Render URL. Deploy
 the API first, take its URL to Vercel, then come back and set `CLIENT_URL`.
+
+`CLIENT_URL` also has a second job from Phase 3 on: every verification and password
+reset link is built from it. If it is wrong, the emails still send and the links still
+look fine — they just point at nothing.
+
+### Email
+
+`EMAIL_PROVIDER` ships as `log`, which prints emails to the Render log instead of
+sending them. That is a deliberate default, not an oversight: it lets the API deploy and
+authenticate before a sending domain exists.
+
+To send real email:
+
+1. Create a [Resend](https://resend.com) account and add your domain.
+2. Add the SPF and DKIM records Resend gives you to the domain's DNS, and wait for
+   verification. Without them mail lands in spam or is rejected outright.
+3. On Render set `RESEND_API_KEY`, set `EMAIL_FROM` to an address on that domain, and
+   change `EMAIL_PROVIDER` to `resend`.
+
+Order matters: with `EMAIL_PROVIDER=resend` and no API key the process **refuses to
+boot**, which is intended — silently not sending verification email is worse than a
+failed deploy. So set the key before flipping the provider.
+
+### The refresh cookie is cross-site in production
+
+Vercel and Render are different sites, so the refresh cookie is set with
+`SameSite=None; Secure`. Two consequences:
+
+- **It only works over HTTPS.** Both platforms give you that by default.
+- **A custom domain does not change it** unless the client and API share one. If you
+  ever put them behind the same domain, set `COOKIE_SAMESITE=strict` on Render and the
+  cookie stops being cross-site at all.
+
+If sign-in works but the session vanishes on reload, this is the first thing to check —
+look for the `Set-Cookie` header on the login response and whether the browser kept it.
 
 **Things worth knowing about the free tier:**
 

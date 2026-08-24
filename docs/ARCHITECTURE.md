@@ -72,16 +72,18 @@ which is what makes the credit and billing rules testable in isolation.
 
 ```
 server/src/
-  config/        env (Zod-validated), db, logger, cors
-  middleware/    requestLogger, notFound, errorHandler
-                 + later: requireAuth, requireRole, validate, rateLimit
+  config/        env (Zod-validated), db, logger, cors, cookies
+  middleware/    requestLogger, notFound, errorHandler, requireAuth, validate
+                 + later: requireRole, rateLimit
   routes/        mounts every module under /api
   modules/       feature folders, each: <name>.routes.js / .controller.js
                  / .service.js / .model.js / .validation.js
     health/      (Phase 0-1) liveness + readiness
-    auth/ users/ voices/ tts/ generations/ credits/ plans/ billing/
-    webhooks/ admin/
-  integrations/  ttsProvider/  storage/  email/  payments/
+    auth/        (Phase 2-3) signup, login, refresh, logout, verify, reset
+    users/       (Phase 2) user.model.js — the model only, so far
+                 + later: voices/ tts/ generations/ credits/ plans/ billing/
+                 webhooks/ admin/
+  integrations/  email/ (Phase 3)  + later: ttsProvider/ storage/ payments/
   jobs/          credit renewal, expired-audio cleanup, webhook reconciliation
   utils/         ApiError, lifecycle, token hashing, cost calculation
 ```
@@ -98,13 +100,20 @@ a vendor SDK. The same pattern applies to storage, email, and payments.
 Vite + React Router + TanStack Query + Tailwind + react-hook-form + Zod.
 No Redux: TanStack Query owns server state, one context owns auth.
 
+Phases 2–4 ship the router, the auth context and the api client. TanStack Query,
+Tailwind and react-hook-form are not in yet — plain CSS and controlled inputs cover the
+auth forms, and there is nothing to cache until Phase 5's balance and ledger.
+
 ```
 client/src/
   app/           router, layouts, route guards, theme, error boundary
   config/        env.js  (validates VITE_ variables)
   lib/           apiClient.js  (base URL, credentials, 401 → refresh → retry)
+                 formError.js  (API error → one line for a form)
   features/
     auth/        signup, login, verify-email, forgot, reset, AuthProvider
+    dashboard/   (Phase 4) account summary; the studio replaces it in Phase 7
+    health/      (Phase 1) the deployment status panel
     studio/      editor + char/byte counter, language + voice picker, cost estimate, player
     history/     list, filters, pagination, replay, download, delete
     credits/     balance widget, ledger, low-balance banner
@@ -143,19 +152,25 @@ Indexes to create with the models: `User.email` unique · `Generation { userId, 
 
 ## 6. Authentication
 
-- Passwords: bcrypt (cost 12) or argon2id.
+- Passwords: bcryptjs (cost 12, `BCRYPT_COST`). Rejected above 72 bytes rather than
+  truncated, because that is all bcrypt hashes.
 - **Access token**: JWT, ~15 min, returned in the response body, held in React memory.
   Sent as `Authorization: Bearer`. Never in `localStorage`.
-- **Refresh token**: opaque random bytes in an `httpOnly; Secure; SameSite=Lax` cookie
-  scoped to the refresh route. Only its SHA-256 hash is stored.
+- **Refresh token**: opaque random bytes in an `httpOnly` cookie scoped to `/api/auth`.
+  Only its SHA-256 hash is stored. `SameSite` is `lax` in development and **`none` +
+  `Secure` in production**, because Vercel and Render are different sites and a `Lax`
+  cookie is not sent on a cross-site request — see [DECISIONS.md](./DECISIONS.md).
 - **Rotation with reuse detection**: each refresh issues a new token and retires the old
   one. Replaying a retired token revokes the whole family and forces re-login.
 - Access token in a header + path-scoped refresh cookie gives CSRF resistance without a
   separate CSRF token layer.
 - Email verification and password reset use the same pattern: random token, hashed at
   rest, single use, short TTL. A completed reset revokes all refresh tokens.
-- Signup and forgot-password return identical responses whether or not the account
-  exists, to prevent enumeration.
+- Signup, resend-verification and forgot-password return identical responses whether or
+  not the account exists, to prevent enumeration. That is also why signup returns no
+  session — see [DECISIONS.md](./DECISIONS.md).
+- Login timing is equalised: a missing account is compared against a dummy hash generated
+  at the real cost factor, so present and absent addresses take the same time.
 - `role: 'user' | 'admin'`. Admin is set directly in the database. There is no endpoint
   that can ever grant it.
 
