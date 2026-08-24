@@ -12,6 +12,7 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node scripts/seed.js",
+    "seed:billing": "node scripts/seed-billing.js",
     "test": "node --test"
   },
   "dependencies": {

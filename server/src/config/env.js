@@ -15,6 +15,19 @@ dotenv.config({ path: path.join(serverRoot, '.env'), quiet: true });
 const stripTrailingSlash = (value) => value.replace(/\/+$/, '');
 
 /**
+ * A boolean from an environment variable.
+ *
+ * Not z.coerce.boolean(), which treats every non-empty string as true - so
+ * "false" would be true, which is the worst possible failure mode for a flag
+ * whose whole job is to turn something off.
+ */
+const envBoolean = (fallback) =>
+  z
+    .enum(['true', 'false'])
+    .default(fallback ? 'true' : 'false')
+    .transform((value) => value === 'true');
+
+/**
  * Reads a Google service account key out of an environment variable.
  *
  * Accepts the raw JSON or a base64 encoding of it. Base64 is what the README
@@ -119,18 +132,109 @@ const envSchema = z.object({
     .default('')
     .transform((raw) => (raw ? { raw, parsed: parseServiceAccount(raw) } : null)),
 
-  // Where generated audio is written. 'local' puts files under
-  // GENERATED_AUDIO_DIR; S3-compatible storage arrives with its own adapter.
-  STORAGE_PROVIDER: z.enum(['local']).default('local'),
+  /**
+   * Where generated audio is written.
+   *
+   *   local - files under GENERATED_AUDIO_DIR. Right for development, and wrong
+   *           for Render: the disk is ephemeral, so a deploy takes every file and
+   *           leaves the Generation rows pointing at nothing.
+   *   s3    - any S3-compatible bucket (AWS S3, Cloudflare R2, Backblaze B2,
+   *           MinIO). This is the permanent one. See integrations/storage/s3.js.
+   */
+  STORAGE_PROVIDER: z.enum(['local', 's3']).default('local'),
 
   // Relative to the server package root. Git-ignored (`tmp/`).
   GENERATED_AUDIO_DIR: z.string().default('tmp/audio'),
+
+  // Required when STORAGE_PROVIDER=s3.
+  S3_BUCKET: z.string().default(''),
+
+  // AWS needs a real region. R2 wants the literal 'auto'; B2 and MinIO ignore it
+  // but SigV4 still has to sign *something*, so it is never blank.
+  S3_REGION: z.string().default('auto'),
+
+  // Blank means real AWS S3, addressed virtual-host style. Set it for anything
+  // else - R2 is https://<account-id>.r2.cloudflarestorage.com.
+  S3_ENDPOINT: z.string().default(''),
+
+  S3_ACCESS_KEY_ID: z.string().default(''),
+  S3_SECRET_ACCESS_KEY: z.string().default(''),
+
+  // Bucket in the path (endpoint/bucket/key) rather than the hostname. What R2,
+  // MinIO and most non-AWS implementations want. Ignored when S3_ENDPOINT is
+  // blank, because AWS deprecated path style.
+  S3_FORCE_PATH_STYLE: envBoolean(true),
 
   // Hard ceiling on one request's input, in UTF-8 bytes. Google's synthesize
   // endpoint rejects a request whose payload exceeds 5000 bytes; staying under
   // it is our job, because a rejected call still costs a round trip and the
   // error it returns is not one a user can act on.
   TTS_MAX_INPUT_BYTES: z.coerce.number().int().min(100).max(5_000).default(4_800),
+
+  // -------------------------------------------------------------------------
+  // Payments
+  // -------------------------------------------------------------------------
+
+  /**
+   * 'mock' keeps checkout runnable with no Razorpay account: orders and
+   * subscriptions get local ids, and the webhook is signed with the same secret
+   * the server verifies with, so the whole grant path - order, payment, webhook,
+   * ledger row, balance - is exercised for real. It never moves money and never
+   * leaves the machine.
+   *
+   * 'razorpay' talks to Razorpay. Test and live mode are the same code path: the
+   * mode is a property of the key pair, not of this setting.
+   */
+  PAYMENT_PROVIDER: z.enum(['razorpay', 'mock']).default('mock'),
+
+  // rzp_test_... or rzp_live_... The key id is public - the browser needs it to
+  // open Checkout, and the API returns it with every order.
+  RAZORPAY_KEY_ID: z.string().default(''),
+
+  // Secret. Signs API calls and verifies the Checkout handler's signature.
+  RAZORPAY_KEY_SECRET: z.string().default(''),
+
+  /**
+   * A different secret from the key secret, set per webhook in the Razorpay
+   * dashboard. Required when PAYMENT_PROVIDER=razorpay: without it there is no
+   * way to tell a real delivery from a forged POST, and the webhook is the only
+   * thing that grants credits.
+   */
+  RAZORPAY_WEBHOOK_SECRET: z.string().default(''),
+
+  // -------------------------------------------------------------------------
+  // Hardening
+  // -------------------------------------------------------------------------
+
+  // Largest JSON body accepted. The biggest legitimate one is a TTS request at
+  // TTS_MAX_INPUT_BYTES (under 5 KB) plus a few short fields, so this is roughly
+  // 20x headroom and still small enough that a body flood costs the process
+  // nothing. Webhooks parse their own raw body under the same ceiling.
+  JSON_BODY_LIMIT: z.string().default('100kb'),
+
+  // Off in tests, where the suite fires hundreds of requests from one address and
+  // a limiter would fail them instead of the code under test.
+  RATE_LIMIT_ENABLED: envBoolean(true),
+
+  // The window every limit below is counted over.
+  RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().min(1).max(1_440).default(15),
+
+  // Per IP, on the credential endpoints only: login, signup, the two email flows,
+  // password reset. Low, because these are the ones worth brute forcing.
+  RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).default(20),
+
+  // Per user. Every generation spends real provider money, so this is a spend
+  // ceiling as much as an abuse one.
+  RATE_LIMIT_TTS_MAX: z.coerce.number().int().min(1).default(40),
+
+  // Per user, on order and subscription creation. A created order is a row in
+  // Razorpay's system too, so a loop here makes a mess in someone else's
+  // dashboard as well as ours.
+  RATE_LIMIT_PAYMENT_MAX: z.coerce.number().int().min(1).default(20),
+
+  // Per IP, across the whole API, as a backstop for anything not covered above.
+  // Generous: a normal session's page loads, polls and refreshes are all in here.
+  RATE_LIMIT_API_MAX: z.coerce.number().int().min(1).default(600),
 });
 
 const parsed = envSchema
@@ -156,6 +260,48 @@ const parsed = envSchema
         'GOOGLE_SERVICE_ACCOUNT_JSON is not a service account key. Expected JSON (or base64 of it) containing client_email and private_key',
     },
   )
+  // One rule per missing credential rather than one combined rule, so the boot
+  // failure names the variable you actually have to go and find.
+  .refine((value) => value.PAYMENT_PROVIDER !== 'razorpay' || value.RAZORPAY_KEY_ID.length > 0, {
+    path: ['RAZORPAY_KEY_ID'],
+    message: 'RAZORPAY_KEY_ID is required when PAYMENT_PROVIDER is "razorpay"',
+  })
+  .refine((value) => value.PAYMENT_PROVIDER !== 'razorpay' || value.RAZORPAY_KEY_SECRET.length > 0, {
+    path: ['RAZORPAY_KEY_SECRET'],
+    message: 'RAZORPAY_KEY_SECRET is required when PAYMENT_PROVIDER is "razorpay"',
+  })
+  /**
+   * The webhook secret is not optional even though nothing would visibly break
+   * without it. Purchased credits are granted only by the webhook, and the only
+   * thing separating a real delivery from an unauthenticated POST that mints
+   * credits is this signature. A missing secret has to stop the boot.
+   */
+  .refine(
+    (value) => value.PAYMENT_PROVIDER !== 'razorpay' || value.RAZORPAY_WEBHOOK_SECRET.length > 0,
+    {
+      path: ['RAZORPAY_WEBHOOK_SECRET'],
+      message:
+        'RAZORPAY_WEBHOOK_SECRET is required when PAYMENT_PROVIDER is "razorpay" - it is what proves a webhook came from Razorpay, and the webhook is what grants credits',
+    },
+  )
+  .refine((value) => value.STORAGE_PROVIDER !== 's3' || value.S3_BUCKET.length > 0, {
+    path: ['S3_BUCKET'],
+    message: 'S3_BUCKET is required when STORAGE_PROVIDER is "s3"',
+  })
+  .refine(
+    (value) =>
+      value.STORAGE_PROVIDER !== 's3' ||
+      (value.S3_ACCESS_KEY_ID.length > 0 && value.S3_SECRET_ACCESS_KEY.length > 0),
+    {
+      path: ['S3_ACCESS_KEY_ID'],
+      message:
+        'S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are both required when STORAGE_PROVIDER is "s3"',
+    },
+  )
+  .refine((value) => value.S3_ENDPOINT === '' || /^https?:\/\//.test(value.S3_ENDPOINT), {
+    path: ['S3_ENDPOINT'],
+    message: 'S3_ENDPOINT must start with http:// or https:// (or be blank for real AWS S3)',
+  })
   .safeParse(process.env);
 
 if (!parsed.success) {
@@ -178,3 +324,9 @@ export const googleServiceAccount = env.GOOGLE_SERVICE_ACCOUNT_JSON?.parsed ?? n
 
 export const isProduction = env.NODE_ENV === 'production';
 export const isDevelopment = env.NODE_ENV === 'development';
+export const isTest = env.NODE_ENV === 'test';
+
+// Trailing slash stripped so s3.js can join it to a key without producing a
+// double slash, which some S3 implementations sign differently from how they
+// store it.
+export const s3Endpoint = env.S3_ENDPOINT ? stripTrailingSlash(env.S3_ENDPOINT) : '';

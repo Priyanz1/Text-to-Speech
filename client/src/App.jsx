@@ -1,6 +1,7 @@
 import { Link, Navigate, Route, Routes } from 'react-router-dom';
 
 import { ProtectedRoute } from './app/ProtectedRoute.jsx';
+import { AdminPage } from './features/admin/AdminPage.jsx';
 import { AuthLayout } from './features/auth/AuthLayout.jsx';
 import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
@@ -8,6 +9,7 @@ import { ResendVerificationPage } from './features/auth/ResendVerificationPage.j
 import { ResetPasswordPage } from './features/auth/ResetPasswordPage.jsx';
 import { SignupPage } from './features/auth/SignupPage.jsx';
 import { VerifyEmailPage } from './features/auth/VerifyEmailPage.jsx';
+import { BillingPage } from './features/billing/BillingPage.jsx';
 import { DashboardPage } from './features/dashboard/DashboardPage.jsx';
 import { HistoryPage } from './features/history/HistoryPage.jsx';
 
@@ -52,6 +54,28 @@ export default function App() {
         element={
           <ProtectedRoute>
             <HistoryPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/billing"
+        element={
+          <ProtectedRoute>
+            <BillingPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Signed in is all this route checks. Being an administrator is checked by
+          the API on every request, reading the role from the database - so a
+          non-admin who routes themselves here gets a 403 and an explanation
+          rather than a blank page. */}
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <AdminPage />
           </ProtectedRoute>
         }
       />

@@ -50,9 +50,19 @@ export function DashboardPage() {
           <p className="subtitle">Signed in as {user.email}</p>
         </div>
         <div className="header-actions">
+          <Link className="download" to="/billing">
+            Billing
+          </Link>
           <Link className="download" to="/history">
             History
           </Link>
+          {/* Only for an admin, and only as a convenience: the API checks the role
+              on every request, so hiding the link is not what keeps anyone out. */}
+          {user.role === 'admin' ? (
+            <Link className="download" to="/admin">
+              Admin
+            </Link>
+          ) : null}
           <button type="button" onClick={handleLogout} disabled={isSigningOut}>
             {isSigningOut ? 'Signing out…' : 'Sign out'}
           </button>
@@ -145,7 +155,8 @@ export function DashboardPage() {
       </div>
 
       <footer className="footer">
-        Credits are spent per character. Paid plans and checkout arrive in a later phase.
+        Credits are spent per character. Buy more, or subscribe, on the{' '}
+        <Link to="/billing">billing page</Link>.
       </footer>
     </main>
   );

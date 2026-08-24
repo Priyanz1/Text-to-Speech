@@ -92,6 +92,94 @@ export async function grantSignupCredits(user) {
 }
 
 /**
+ * Adds credits to one bucket and writes the matching ledger row.
+ *
+ * This is what a paid credit pack and a subscription renewal both go through, so
+ * there is still exactly one file in the codebase that can change a balance.
+ *
+ * The caller owns the claim. Every caller has a document that says whether this
+ * grant has already happened - PaymentOrder.creditedAt for a pack, the
+ * WebhookEvent row for a subscription charge - and must compare-and-set it before
+ * calling. This function is the second line of defence, not the first: the
+ * deterministic idempotencyKey means that even an unclaimed double call cannot
+ * write two rows.
+ *
+ * It can, briefly, produce two increments. The balance is incremented first
+ * (because balanceAfter is not knowable until it has been), and if the ledger row
+ * then turns out to be a duplicate the increment is reversed. That path only runs
+ * if a caller skipped its claim, which is a bug - so it logs loudly, and if the
+ * reversal itself fails reconcile() is what finds the drift.
+ *
+ * Returns { granted, credits, balanceAfter }. granted is false when this grant had
+ * already been written, which callers should treat as success.
+ */
+export async function grantCredits({ userId, credits, bucket, type, idempotencyKey, note = '' }) {
+  if (!Number.isInteger(credits) || credits < 1) {
+    throw new ApiError(500, 'Refusing to grant a non-positive or fractional number of credits');
+  }
+
+  if (!Object.values(BUCKETS).includes(bucket)) {
+    throw new ApiError(500, `Refusing to grant credits to an unknown bucket: ${bucket}`);
+  }
+
+  if (!idempotencyKey) {
+    // Without a key this write is not repeatable-safe, and every path that
+    // reaches here is a path a provider will retry.
+    throw new ApiError(500, 'Refusing to grant credits without an idempotency key');
+  }
+
+  const field = bucket === BUCKETS.PURCHASED ? 'purchasedCredits' : 'subscriptionCredits';
+
+  const after = await User.findByIdAndUpdate(
+    userId,
+    { $inc: { [field]: credits } },
+    { returnDocument: 'after' },
+  );
+
+  if (!after) throw new ApiError(404, 'User not found');
+
+  const row = await appendRow({
+    userId,
+    type,
+    bucket,
+    amount: credits,
+    balanceAfter: after[field],
+    idempotencyKey,
+    note,
+  });
+
+  if (!row) {
+    logger.warn('Reversing a duplicate credit grant', { userId: String(userId), idempotencyKey });
+
+    try {
+      const restored = await User.findByIdAndUpdate(
+        userId,
+        { $inc: { [field]: -credits } },
+        { returnDocument: 'after' },
+      );
+
+      return { granted: false, credits: 0, balanceAfter: restored[field] };
+    } catch (error) {
+      // Deliberately not rethrown: the grant itself was correctly refused, and
+      // failing the caller here would make a provider retry a grant that already
+      // exists. The drift is logged and reconcile() reports it.
+      logger.error('Could not reverse a duplicate credit grant; balance has drifted', {
+        userId: String(userId),
+        idempotencyKey,
+        credits,
+        message: error.message,
+      });
+
+      return { granted: false, credits: 0, balanceAfter: after[field] };
+    }
+  }
+
+  logger.info('Granted credits', { userId: String(userId), credits, bucket, type });
+
+  return { granted: true, credits, balanceAfter: after[field] };
+}
+
+/**
  * Spends credits, or fails without spending any.
  *
  * The whole operation is one update:

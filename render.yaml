@@ -112,8 +112,68 @@ services:
       - key: STORAGE_PROVIDER
         value: local
 
+      # The S3-compatible bucket, used only once STORAGE_PROVIDER is `s3`. All
+      # `sync: false`: the key pair is a secret, and the bucket, region and
+      # endpoint differ per provider (AWS wants a real region and no endpoint,
+      # Cloudflare R2 wants `auto` and an account endpoint). Unset here means the
+      # defaults in src/config/env.js apply, and `local` ignores them anyway.
+      #
+      # The bucket must be PRIVATE. Audio is served through
+      # GET /api/generations/:id/audio after an ownership check.
+      - key: S3_BUCKET
+        sync: false
+
+      - key: S3_REGION
+        sync: false
+
+      - key: S3_ENDPOINT
+        sync: false
+
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+
+      - key: S3_FORCE_PATH_STYLE
+        sync: false
+
+      # Payments. Left as `mock` for the same reason as TTS_PROVIDER: with
+      # `razorpay` and no webhook secret the process refuses to boot, which is
+      # correct but a poor first deploy. Flip it to `razorpay` in the dashboard
+      # once all three keys below are set.
+      #
+      # Test mode and live mode are the same code path - the mode lives in the
+      # key pair. Going live means replacing rzp_test_ values with rzp_live_
+      # ones and re-pointing the webhook, with no commit.
+      - key: PAYMENT_PROVIDER
+        value: mock
+
+      # Public - the browser needs it to open Checkout - but it identifies the
+      # account, so test and live values must not be mixed up.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+
+      # The webhook is the ONLY thing that grants purchased credits, so this is
+      # what stands between a paid order and a free credit endpoint. A different
+      # secret from RAZORPAY_KEY_SECRET, chosen when the webhook is added in the
+      # Razorpay dashboard.
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+
+      # Hardening. Declared explicitly rather than left to its default, because
+      # this is the one setting whose accidental `false` in production is
+      # invisible until someone is brute-forcing logins.
+      - key: RATE_LIMIT_ENABLED
+        value: 'true'
+
       # TTS_MAX_INPUT_BYTES and GENERATED_AUDIO_DIR use their defaults (4800
-      # bytes, under Google's 5000 ceiling, and server/tmp/audio).
+      # bytes, under Google's 5000 ceiling, and server/tmp/audio). So do
+      # JSON_BODY_LIMIT (100kb) and the four RATE_LIMIT_* windows and ceilings -
+      # see server/.env.example for what each one counts.
 
       # ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL_DAYS, BCRYPT_COST, the two token
       # TTLs and COOKIE_SAMESITE are all left to their defaults. COOKIE_SAMESITE

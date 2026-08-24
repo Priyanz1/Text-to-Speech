@@ -1,12 +1,86 @@
 import { createApp } from './app.js';
-import { env, isDevelopment } from './config/env.js';
+import { env, isDevelopment, isProduction } from './config/env.js';
+import { refreshCookieOptions } from './config/cookies.js';
 import { logger } from './config/logger.js';
 import { connectDatabase, disconnectDatabase } from './config/db.js';
+import * as payments from './integrations/payments/index.js';
 import * as storage from './integrations/storage/index.js';
 import * as ttsProvider from './integrations/ttsProvider/index.js';
 import { markShuttingDown } from './utils/lifecycle.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+/**
+ * Shouts about configuration that is fine locally and wrong in production.
+ *
+ * Every one of these is a setting whose development default is deliberately a
+ * no-op - a mock provider, local disk, a logged email - and every one of them fails
+ * silently in production. A mock payment provider does not error; it hands out
+ * credits for free. Local audio storage does not error; it loses every file on the
+ * next deploy. Silence is the failure mode, so this makes noise instead.
+ *
+ * Warnings, not a refusal to boot: a deployment that is deliberately staged this
+ * way should still start, and an operator who cannot read the logs has a bigger
+ * problem than this check can solve.
+ */
+function warnAboutProductionConfig() {
+  if (!isProduction) return;
+
+  const problems = [];
+
+  if (env.PAYMENT_PROVIDER === 'mock') {
+    problems.push('PAYMENT_PROVIDER=mock - every "purchase" grants credits without taking money');
+  }
+
+  if (env.TTS_PROVIDER === 'mock') {
+    problems.push('TTS_PROVIDER=mock - generated audio is a synthetic tone, not speech');
+  }
+
+  if (env.STORAGE_PROVIDER === 'local') {
+    problems.push(
+      'STORAGE_PROVIDER=local - audio is written to the container filesystem and is lost on every deploy',
+    );
+  }
+
+  if (env.EMAIL_PROVIDER === 'log') {
+    problems.push(
+      'EMAIL_PROVIDER=log - verification and reset emails are only written to the log, so nobody can verify an account',
+    );
+  }
+
+  if (env.CLIENT_URL.includes('localhost') || env.CLIENT_URL.includes('127.0.0.1')) {
+    problems.push(`CLIENT_URL=${env.CLIENT_URL} - CORS will refuse the real front end`);
+  }
+
+  if (!env.RATE_LIMIT_ENABLED) {
+    problems.push('RATE_LIMIT_ENABLED=false - login and TTS have no request ceiling');
+  }
+
+  /**
+   * The client and the API are on different origins in this deployment (separate
+   * Render services), which makes the refresh cookie cross-site. A cross-site
+   * cookie is only sent when SameSite=None, so anything else here means every
+   * refresh silently fails and users are signed out when their access token
+   * expires - a bug that looks like an auth bug and is a cookie setting.
+   */
+  if (refreshCookieOptions.sameSite !== 'none') {
+    problems.push(
+      `COOKIE_SAMESITE=${refreshCookieOptions.sameSite} - the refresh cookie will not be sent from a front end on another origin`,
+    );
+  }
+
+  if (!refreshCookieOptions.secure) {
+    problems.push('The refresh cookie is not marked Secure');
+  }
+
+  for (const problem of problems) {
+    logger.warn(`Production configuration warning: ${problem}`);
+  }
+
+  if (problems.length === 0) {
+    logger.info('Production configuration check passed');
+  }
+}
 
 const app = createApp();
 
@@ -18,10 +92,14 @@ const server = app.listen(env.PORT, () => {
     { port: env.PORT, environment: env.NODE_ENV },
   );
 
-  // Which provider is live is never worth guessing at, especially the one that
-  // costs money per request.
+  // Which provider is live is never worth guessing at, especially the ones that
+  // cost money per request or move money.
   logger.info(`Speech provider: ${ttsProvider.describe()}`);
   logger.info(`Audio storage: ${storage.describe()}`);
+  logger.info(`Email provider: ${env.EMAIL_PROVIDER}`);
+  logger.info(`Payment provider: ${payments.describe()}`);
+
+  warnAboutProductionConfig();
 });
 
 // Connect to MongoDB *after* the server is listening, and do not treat failure
